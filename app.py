@@ -11,11 +11,14 @@ import os
 
 from database import (
     init_db, get_latest_metric, get_metrics_history,
-    get_hourly_averages, get_daily_summary, get_recent_alerts,
+    get_hourly_averages, get_daily_summary, get_recent_alerts, get_peak_hours,
 )
 
 app = Flask(__name__, static_folder="static")
-CORS(app)
+allowed_origin = os.getenv("FRONTEND_ORIGIN")
+if allowed_origin:
+    CORS(app, resources={r"/api/*": {"origins": [allowed_origin]}})
+# Otherwise, no CORS policy is needed: the dashboard and API share one origin.
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
@@ -78,8 +81,23 @@ def api_alerts():
     alerts = get_recent_alerts(limit)
     return success({"alerts": alerts, "count": len(alerts)})
 
+def require_admin_key():
+    """Protect operational endpoints; never expose collection/training publicly."""
+    configured_key = os.getenv("ADMIN_API_KEY")
+    supplied_key = request.headers.get("X-Admin-Key", "")
+    if not configured_key:
+        return error("This operation is disabled until ADMIN_API_KEY is configured.", 503)
+    import hmac
+    if not hmac.compare_digest(supplied_key, configured_key):
+        return error("Unauthorized.", 401)
+    return None
+
+
 @app.route("/api/collect", methods=["POST"])
 def api_collect():
+    denied = require_admin_key()
+    if denied:
+        return denied
     def _run():
         try:
             from collector import collect
@@ -91,22 +109,15 @@ def api_collect():
 
 @app.route("/api/stats/peak-hours")
 def api_peak_hours():
-    from database import get_connection
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT CAST(strftime('%H', timestamp) AS INTEGER) AS hour_of_day,
-               ROUND(AVG(download_mbps), 2) AS avg_download,
-               ROUND(AVG(latency_ms), 2)    AS avg_latency,
-               COUNT(*) AS samples
-        FROM network_metrics GROUP BY hour_of_day ORDER BY hour_of_day
-    """).fetchall()
-    conn.close()
-    return success([dict(r) for r in rows])
+    return success(get_peak_hours())
 
 # ── ML Endpoints ──────────────────────────────────────────────
 
 @app.route("/api/ml/train", methods=["POST"])
 def api_ml_train():
+    denied = require_admin_key()
+    if denied:
+        return denied
     try:
         from predictor import train_model
         result = train_model()
@@ -154,7 +165,9 @@ def not_found(e): return error("Not found.", 404)
 @app.errorhandler(500)
 def server_error(e): return error("Server error.", 500)
 
+# Idempotent schema creation also runs under Gunicorn, where __main__ is not executed.
+init_db()
+
 if __name__ == "__main__":
-    init_db()
-    log.info("Starting WiFi Monitor API v2.0 on http://localhost:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    log.info("Starting WiFi-NetPulse API on http://localhost:5000")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)

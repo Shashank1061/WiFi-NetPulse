@@ -1,168 +1,245 @@
-"""
-database.py — SQLite database setup and helper functions
-WiFi Usage and Speed Monitoring System
+"""Database layer for WiFi-NetPulse.
+
+Uses SQLite for local development when DATABASE_URL is not set, and
+PostgreSQL (Neon) in deployment when DATABASE_URL is configured.
+All timestamps are stored as naive UTC values for consistent cross-platform
+comparisons; API responses serialize them as ISO-8601 strings.
 """
 
-import sqlite3
 import os
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wifi_monitor.db")
+from sqlalchemy import (
+    Column, DateTime, Float, Integer, MetaData, String, Table, Text,
+    create_engine, func, insert, select,
+)
+from sqlalchemy.engine import URL
+
+BASE_DIR = Path(__file__).resolve().parent
+APP_TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Kolkata"))
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if (os.getenv("RENDER") == "true" or os.getenv("GITHUB_ACTIONS") == "true") and not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL must be configured in the cloud environment; refusing to use ephemeral SQLite.")
+
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+
+if DATABASE_URL:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={"sslmode": "require"} if "neon.tech" in DATABASE_URL else {},
+    )
+else:
+    sqlite_path = BASE_DIR / "wifi_monitor.db"
+    engine = create_engine(
+        URL.create("sqlite", database=str(sqlite_path)),
+        connect_args={"check_same_thread": False},
+    )
+
+metadata = MetaData()
+
+network_metrics = Table(
+    "network_metrics", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("timestamp", DateTime(timezone=False), nullable=False, server_default=func.now()),
+    Column("download_mbps", Float),
+    Column("upload_mbps", Float),
+    Column("latency_ms", Float),
+    Column("packet_loss_pct", Float),
+    Column("jitter_ms", Float),
+    Column("isp", String(255)),
+    Column("server_name", String(255)),
+    Column("ip_address", String(64)),
+)
+
+hourly_summary = Table(
+    "hourly_summary", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("hour_bucket", DateTime(timezone=False), unique=True),
+    Column("avg_download", Float),
+    Column("avg_upload", Float),
+    Column("avg_latency", Float),
+    Column("max_download", Float),
+    Column("min_download", Float),
+    Column("sample_count", Integer),
+)
+
+alerts = Table(
+    "alerts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("timestamp", DateTime(timezone=False), nullable=False, server_default=func.now()),
+    Column("alert_type", String(64)),
+    Column("metric", String(64)),
+    Column("value", Float),
+    Column("threshold", Float),
+    Column("message", Text),
+)
+
+
+def get_engine():
+    """Return the shared SQLAlchemy engine (used by pandas in predictor.py)."""
+    return engine
 
 
 def get_connection():
-    """Return a SQLite connection with row_factory for dict-like access."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Compatibility helper returning a SQLAlchemy Connection."""
+    return engine.connect()
+
+
+def _serialize(row):
+    item = dict(row)
+    for key, value in item.items():
+        if isinstance(value, datetime):
+            if key == "hour":
+                # Hourly buckets have already been converted to APP_TIMEZONE.
+                item[key] = value.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                # Measurement timestamps are UTC; the Z suffix makes browser parsing unambiguous.
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+                item[key] = value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return item
+
+
+def _utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def init_db():
-    """Create all tables if they don't exist."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Main metrics table — one row per measurement
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS network_metrics (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp       DATETIME DEFAULT (datetime('now', 'localtime')),
-            download_mbps   REAL,          -- Download speed in Mbps
-            upload_mbps     REAL,          -- Upload speed in Mbps
-            latency_ms      REAL,          -- Ping latency in milliseconds
-            packet_loss_pct REAL,          -- Packet loss percentage (0-100)
-            jitter_ms       REAL,          -- Latency variation in ms
-            isp             TEXT,          -- ISP name from speedtest
-            server_name     TEXT,          -- Speedtest server used
-            ip_address      TEXT           -- External IP at time of test
-        )
-    """)
-
-    # Hourly aggregates for faster dashboard queries
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS hourly_summary (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            hour_bucket     DATETIME UNIQUE, -- Truncated to the hour
-            avg_download    REAL,
-            avg_upload      REAL,
-            avg_latency     REAL,
-            max_download    REAL,
-            min_download    REAL,
-            sample_count    INTEGER
-        )
-    """)
-
-    # Alerts — triggered when thresholds are breached
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS alerts (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp   DATETIME DEFAULT (datetime('now', 'localtime')),
-            alert_type  TEXT,   -- 'slow_speed' | 'high_latency' | 'packet_loss'
-            metric      TEXT,
-            value       REAL,
-            threshold   REAL,
-            message     TEXT
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-    print("[DB] Database initialized at:", DB_PATH)
+    """Create missing tables. Safe to run repeatedly during deployment."""
+    metadata.create_all(engine)
+    print(f"[DB] Database initialized ({engine.dialect.name}).")
 
 
 def insert_metric(download, upload, latency, packet_loss=0.0,
                   jitter=0.0, isp="", server="", ip=""):
-    """Insert a single measurement row."""
-    conn = get_connection()
-    conn.execute("""
-        INSERT INTO network_metrics
-            (download_mbps, upload_mbps, latency_ms, packet_loss_pct,
-             jitter_ms, isp, server_name, ip_address)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (download, upload, latency, packet_loss, jitter, isp, server, ip))
-    conn.commit()
-    conn.close()
+    values = {
+        "timestamp": _utc_now(),
+        "download_mbps": download,
+        "upload_mbps": upload,
+        "latency_ms": latency,
+        "packet_loss_pct": packet_loss,
+        "jitter_ms": jitter,
+        "isp": isp,
+        "server_name": server,
+        "ip_address": ip,
+    }
+    with engine.begin() as conn:
+        conn.execute(insert(network_metrics).values(**values))
 
 
 def insert_alert(alert_type, metric, value, threshold, message):
-    """Log an alert when a threshold is breached."""
-    conn = get_connection()
-    conn.execute("""
-        INSERT INTO alerts (alert_type, metric, value, threshold, message)
-        VALUES (?, ?, ?, ?, ?)
-    """, (alert_type, metric, value, threshold, message))
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        conn.execute(insert(alerts).values(
+            timestamp=_utc_now(), alert_type=alert_type, metric=metric,
+            value=value, threshold=threshold, message=message,
+        ))
 
 
 def get_latest_metric():
-    """Return the most recent measurement as a dict."""
-    conn = get_connection()
-    row = conn.execute("""
-        SELECT * FROM network_metrics ORDER BY timestamp DESC LIMIT 1
-    """).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    stmt = select(network_metrics).order_by(network_metrics.c.timestamp.desc()).limit(1)
+    with engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return _serialize(row) if row else None
 
 
 def get_metrics_history(hours=24, limit=200):
-    """Return up to `limit` rows from the last `hours` hours."""
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT * FROM network_metrics
-        WHERE timestamp >= datetime('now', 'localtime', ? || ' hours')
-        ORDER BY timestamp ASC
-        LIMIT ?
-    """, (f"-{hours}", limit)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    since = _utc_now() - timedelta(hours=hours)
+    stmt = (select(network_metrics)
+            .where(network_metrics.c.timestamp >= since)
+            .order_by(network_metrics.c.timestamp.asc())
+            .limit(limit))
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_serialize(row) for row in rows]
 
 
 def get_hourly_averages(days=7):
-    """Return average metrics grouped by hour for the past N days."""
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT
-            strftime('%Y-%m-%d %H:00', timestamp) AS hour,
-            ROUND(AVG(download_mbps), 2)   AS avg_download,
-            ROUND(AVG(upload_mbps), 2)     AS avg_upload,
-            ROUND(AVG(latency_ms), 2)      AS avg_latency,
-            COUNT(*)                        AS sample_count
-        FROM network_metrics
-        WHERE timestamp >= datetime('now', 'localtime', ? || ' days')
-        GROUP BY hour
-        ORDER BY hour ASC
-    """, (f"-{days}",)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    since = _utc_now() - timedelta(days=days)
+    if engine.dialect.name == "postgresql":
+        local_timestamp = func.timezone(APP_TIMEZONE.key, network_metrics.c.timestamp)
+        bucket = func.date_trunc("hour", local_timestamp)
+    else:
+        # SQLite has no IANA timezone database; use the configured zone's current offset.
+        offset = datetime.now(APP_TIMEZONE).utcoffset() or timedelta(0)
+        total_minutes = int(offset.total_seconds() // 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        total_minutes = abs(total_minutes)
+        modifiers = [f"{sign}{total_minutes // 60} hours"]
+        if total_minutes % 60:
+            modifiers.append(f"{sign}{total_minutes % 60} minutes")
+        bucket = func.strftime("%Y-%m-%d %H:00:00", network_metrics.c.timestamp, *modifiers)
+    stmt = (select(
+                bucket.label("hour"),
+                func.round(func.avg(network_metrics.c.download_mbps), 2).label("avg_download"),
+                func.round(func.avg(network_metrics.c.upload_mbps), 2).label("avg_upload"),
+                func.round(func.avg(network_metrics.c.latency_ms), 2).label("avg_latency"),
+                func.count().label("sample_count"),
+            )
+            .where(network_metrics.c.timestamp >= since)
+            .group_by(bucket)
+            .order_by(bucket.asc()))
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_serialize(row) for row in rows]
 
 
 def get_daily_summary():
-    """Return today's min/max/avg stats."""
-    conn = get_connection()
-    row = conn.execute("""
-        SELECT
-            ROUND(AVG(download_mbps), 2)  AS avg_download,
-            ROUND(MAX(download_mbps), 2)  AS max_download,
-            ROUND(MIN(download_mbps), 2)  AS min_download,
-            ROUND(AVG(upload_mbps), 2)    AS avg_upload,
-            ROUND(AVG(latency_ms), 2)     AS avg_latency,
-            ROUND(MIN(latency_ms), 2)     AS best_latency,
-            COUNT(*)                       AS total_tests
-        FROM network_metrics
-        WHERE date(timestamp) = date('now', 'localtime')
-    """).fetchone()
-    conn.close()
+    local_now = datetime.now(APP_TIMEZONE)
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = local_start + timedelta(days=1)
+    start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+    end = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+    stmt = select(
+        func.round(func.avg(network_metrics.c.download_mbps), 2).label("avg_download"),
+        func.round(func.max(network_metrics.c.download_mbps), 2).label("max_download"),
+        func.round(func.min(network_metrics.c.download_mbps), 2).label("min_download"),
+        func.round(func.avg(network_metrics.c.upload_mbps), 2).label("avg_upload"),
+        func.round(func.avg(network_metrics.c.latency_ms), 2).label("avg_latency"),
+        func.round(func.min(network_metrics.c.latency_ms), 2).label("best_latency"),
+        func.count().label("total_tests"),
+    ).where(network_metrics.c.timestamp >= start, network_metrics.c.timestamp < end)
+    with engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
     return dict(row) if row else {}
 
 
 def get_recent_alerts(limit=10):
-    """Return the most recent alerts."""
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT * FROM alerts ORDER BY timestamp DESC LIMIT ?
-    """, (limit,)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    stmt = select(alerts).order_by(alerts.c.timestamp.desc()).limit(limit)
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_serialize(row) for row in rows]
+
+
+def get_peak_hours():
+    if engine.dialect.name == "postgresql":
+        local_timestamp = func.timezone(APP_TIMEZONE.key, network_metrics.c.timestamp)
+        hour = func.cast(func.extract("hour", local_timestamp), Integer)
+    else:
+        offset = datetime.now(APP_TIMEZONE).utcoffset() or timedelta(0)
+        total_minutes = int(offset.total_seconds() // 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        total_minutes = abs(total_minutes)
+        modifiers = [f"{sign}{total_minutes // 60} hours"]
+        if total_minutes % 60:
+            modifiers.append(f"{sign}{total_minutes % 60} minutes")
+        hour = func.cast(func.strftime("%H", network_metrics.c.timestamp, *modifiers), Integer)
+    stmt = (select(
+                hour.label("hour_of_day"),
+                func.round(func.avg(network_metrics.c.download_mbps), 2).label("avg_download"),
+                func.round(func.avg(network_metrics.c.latency_ms), 2).label("avg_latency"),
+                func.count().label("samples"),
+            )
+            .group_by(hour).order_by(hour))
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(row) for row in rows]
 
 
 if __name__ == "__main__":

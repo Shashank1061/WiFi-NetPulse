@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import Ridge
@@ -33,7 +34,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, r2_score
 
-from database import get_connection
+from database import get_engine
 
 # ── Logging ────────────────────────────────────────────────────
 log = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ SCALER_PATH   = os.path.join(MODEL_DIR, "scaler.pkl")
 META_PATH     = os.path.join(MODEL_DIR, "model_meta.pkl")
 
 MIN_ROWS_REQUIRED = 20   # Minimum DB rows needed to train
+APP_TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Kolkata"))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -58,17 +60,20 @@ MIN_ROWS_REQUIRED = 20   # Minimum DB rows needed to train
 
 def load_data_from_db() -> pd.DataFrame:
     """Load all network_metrics rows into a DataFrame."""
-    conn = get_connection()
     df = pd.read_sql_query(
         "SELECT timestamp, download_mbps, upload_mbps, latency_ms, "
         "       packet_loss_pct, jitter_ms "
         "FROM network_metrics "
         "ORDER BY timestamp ASC",
-        conn
+        get_engine(),
     )
-    conn.close()
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # Stored timestamps are UTC; model features use the configured local timezone.
+    df["timestamp"] = (
+        pd.to_datetime(df["timestamp"], utc=True)
+        .dt.tz_convert(APP_TIMEZONE)
+        .dt.tz_localize(None)
+    )
     df = df.dropna(subset=["download_mbps", "upload_mbps", "latency_ms"])
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df
@@ -186,7 +191,7 @@ def train_model(force: bool = False) -> dict:
 
     # Save to disk
     meta = {
-        "trained_at":   datetime.now().isoformat(),
+        "trained_at":   datetime.now(APP_TIMEZONE).isoformat(),
         "n_samples":    len(df),
         "feature_cols": FEATURE_COLS,
         "target_cols":  TARGET_COLS,
@@ -266,7 +271,7 @@ def predict_next_hours(n_hours: int = 6) -> list:
     models = joblib.load(MODEL_PATH)
     meta   = joblib.load(META_PATH)
 
-    now          = datetime.now()
+    now          = datetime.now(APP_TIMEZONE).replace(tzinfo=None)
     predictions  = []
 
     # Keep a rolling "last row" so each prediction feeds the next
