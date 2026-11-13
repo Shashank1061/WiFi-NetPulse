@@ -469,11 +469,38 @@ async function loadHeatmap(){
   }catch(e){console.warn(e);}
 }
 
-async function triggerCollection(){
-  const btn=document.querySelector('.btn-run');
-  btn.textContent='Testing…'; btn.disabled=true;
-  try{ await fetch(`${API}/collect`,{method:'POST'}); }catch(e){}
-  setTimeout(()=>{ btn.textContent='Run Test'; btn.disabled=false; refreshAll(); },35000);
+async function triggerCollection() {
+    const btn = document.querySelector('.btn-run');
+
+    btn.textContent = 'Testing...';
+    btn.disabled = true;
+
+    try {
+        const response = await fetch(`${API}/collect`, {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.message || result.error || 'Collection failed');
+        }
+
+        btn.textContent = 'Test Complete';
+        await refreshAll();
+
+    } catch (error) {
+        console.error('Collection error:', error);
+        btn.textContent = 'Test Failed';
+        alert('Run Test failed: ' + error.message);
+
+    } finally {
+        btn.disabled = false;
+
+        setTimeout(() => {
+            btn.textContent = 'Run Test';
+        }, 3000);
+    }
 }
 
 async function refreshAll(){
