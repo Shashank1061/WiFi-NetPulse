@@ -12,8 +12,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
-    Column, DateTime, Float, Integer, MetaData, String, Table, Text,
-    create_engine, func, insert, select, inspect, text,
+    Column, DateTime, Float, Integer, MetaData, Numeric,
+    String, Table, Text, create_engine, func, insert, select,
+    cast, inspect, text,
 )
 from sqlalchemy.engine import URL
 
@@ -196,9 +197,9 @@ def get_hourly_averages(days=7):
         bucket = func.strftime("%Y-%m-%d %H:00:00", network_metrics.c.timestamp, *modifiers)
     stmt = (select(
                 bucket.label("hour"),
-                func.round(func.avg(network_metrics.c.download_mbps), 2).label("avg_download"),
-                func.round(func.avg(network_metrics.c.upload_mbps), 2).label("avg_upload"),
-                func.round(func.avg(network_metrics.c.latency_ms), 2).label("avg_latency"),
+                func.round(cast(func.avg(network_metrics.c.download_mbps), Numeric), 2).label("avg_download"),
+                func.round(cast(func.avg(network_metrics.c.upload_mbps), Numeric), 2).label("avg_upload"),
+                func.round(cast(func.avg(network_metrics.c.latency_ms), Numeric), 2).label("avg_latency"),
                 func.count().label("sample_count"),
             )
             .where(network_metrics.c.timestamp >= since)
@@ -216,12 +217,12 @@ def get_daily_summary():
     start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
     end = local_end.astimezone(timezone.utc).replace(tzinfo=None)
     stmt = select(
-        func.round(func.avg(network_metrics.c.download_mbps), 2).label("avg_download"),
-        func.round(func.max(network_metrics.c.download_mbps), 2).label("max_download"),
-        func.round(func.min(network_metrics.c.download_mbps), 2).label("min_download"),
-        func.round(func.avg(network_metrics.c.upload_mbps), 2).label("avg_upload"),
-        func.round(func.avg(network_metrics.c.latency_ms), 2).label("avg_latency"),
-        func.round(func.min(network_metrics.c.latency_ms), 2).label("best_latency"),
+        func.round(cast(func.avg(network_metrics.c.download_mbps), Numeric), 2).label("avg_download"),
+        func.round(cast(func.max(network_metrics.c.download_mbps), Numeric), 2).label("max_download"),
+        func.round(cast(func.min(network_metrics.c.download_mbps), Numeric), 2).label("min_download"),
+        func.round(cast(func.avg(network_metrics.c.upload_mbps), Numeric), 2).label("avg_upload"),
+        func.round(cast(func.avg(network_metrics.c.latency_ms), Numeric), 2).label("avg_latency"),
+        func.round(cast(func.min(network_metrics.c.latency_ms), Numeric), 2).label("best_latency"),
         func.count().label("total_tests"),
     ).where(network_metrics.c.timestamp >= start, network_metrics.c.timestamp < end)
     with engine.connect() as conn:
@@ -251,8 +252,8 @@ def get_peak_hours():
         hour = func.cast(func.strftime("%H", network_metrics.c.timestamp, *modifiers), Integer)
     stmt = (select(
                 hour.label("hour_of_day"),
-                func.round(func.avg(network_metrics.c.download_mbps), 2).label("avg_download"),
-                func.round(func.avg(network_metrics.c.latency_ms), 2).label("avg_latency"),
+                func.round(cast(func.avg(network_metrics.c.download_mbps), Numeric), 2).label("avg_download"),
+func.round(cast(func.avg(network_metrics.c.latency_ms), Numeric), 2).label("avg_latency"),
                 func.count().label("samples"),
             )
             .group_by(hour).order_by(hour))
