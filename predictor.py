@@ -20,6 +20,7 @@ Dependencies:
 """
 
 import os
+import hashlib
 import logging
 import numpy as np
 import pandas as pd
@@ -35,6 +36,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_absolute_error, r2_score
 
 from database import get_engine
+from sqlalchemy import text
 
 # ── Logging ────────────────────────────────────────────────────
 log = logging.getLogger(__name__)
@@ -50,6 +52,14 @@ MODEL_PATH    = os.path.join(MODEL_DIR, "rf_speed_model.pkl")
 SCALER_PATH   = os.path.join(MODEL_DIR, "scaler.pkl")
 META_PATH     = os.path.join(MODEL_DIR, "model_meta.pkl")
 
+def _model_paths(network_id=None):
+    """Use a separate model artifact for each Wi-Fi network."""
+    if not network_id:
+        return MODEL_PATH, META_PATH
+    token = hashlib.sha256(str(network_id).encode("utf-8")).hexdigest()[:20]
+    return (os.path.join(MODEL_DIR, f"rf_speed_model_{token}.pkl"),
+            os.path.join(MODEL_DIR, f"model_meta_{token}.pkl"))
+
 MIN_ROWS_REQUIRED = 20   # Minimum DB rows needed to train
 APP_TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Kolkata"))
 
@@ -58,15 +68,16 @@ APP_TIMEZONE = ZoneInfo(os.getenv("APP_TIMEZONE", "Asia/Kolkata"))
 #  FEATURE ENGINEERING
 # ══════════════════════════════════════════════════════════════
 
-def load_data_from_db() -> pd.DataFrame:
+def load_data_from_db(network_id=None) -> pd.DataFrame:
     """Load all network_metrics rows into a DataFrame."""
-    df = pd.read_sql_query(
-        "SELECT timestamp, download_mbps, upload_mbps, latency_ms, "
-        "       packet_loss_pct, jitter_ms "
-        "FROM network_metrics "
-        "ORDER BY timestamp ASC",
-        get_engine(),
-    )
+    query = ("SELECT timestamp, download_mbps, upload_mbps, latency_ms, "
+             "packet_loss_pct, jitter_ms FROM network_metrics ")
+    params = None
+    if network_id:
+        query += "WHERE network_id = :network_id "
+        params = {"network_id": network_id}
+    query += "ORDER BY timestamp ASC"
+    df = pd.read_sql_query(text(query), get_engine(), params=params)
 
     # Stored timestamps are UTC; model features use the configured local timezone.
     df["timestamp"] = (
@@ -127,14 +138,14 @@ TARGET_COLS = ["download_mbps", "upload_mbps", "latency_ms"]
 #  TRAINING
 # ══════════════════════════════════════════════════════════════
 
-def train_model(force: bool = False) -> dict:
+def train_model(force: bool = False, network_id=None) -> dict:
     """
     Train a Random Forest model on historical data.
     Returns a dict with training stats.
     Saves the model to disk.
     """
     log.info("Loading data from database…")
-    raw = load_data_from_db()
+    raw = load_data_from_db(network_id)
 
     if len(raw) < MIN_ROWS_REQUIRED:
         msg = (f"Not enough data to train: {len(raw)} rows found, "
@@ -189,9 +200,11 @@ def train_model(force: bool = False) -> dict:
         }
         log.info(f"  [{target}] CV MAE={mean_mae:.2f}  R²={r2:.3f}")
 
-    # Save to disk
+    # Save a distinct model per selected Wi-Fi network.
+    model_path, meta_path = _model_paths(network_id)
     meta = {
         "trained_at":   datetime.now(APP_TIMEZONE).isoformat(),
+        "network_id":   network_id,
         "n_samples":    len(df),
         "feature_cols": FEATURE_COLS,
         "target_cols":  TARGET_COLS,
@@ -212,10 +225,10 @@ def train_model(force: bool = False) -> dict:
         }
     }
 
-    joblib.dump(models, MODEL_PATH)
-    joblib.dump(meta,   META_PATH)
+    joblib.dump(models, model_path)
+    joblib.dump(meta,   meta_path)
 
-    log.info(f"Model saved to {MODEL_PATH}")
+    log.info(f"Model saved to {model_path}")
     return {
         "success":  True,
         "samples":  len(df),
@@ -256,20 +269,21 @@ def _build_feature_row(target_dt: datetime, meta: dict) -> np.ndarray:
     return np.array([[row[f] for f in FEATURE_COLS]])
 
 
-def predict_next_hours(n_hours: int = 6) -> list:
+def predict_next_hours(n_hours: int = 6, network_id=None) -> list:
     """
     Predict network metrics for the next N hours.
     Returns a list of dicts with predictions + confidence info.
 
     Raises FileNotFoundError if model hasn't been trained yet.
     """
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(META_PATH):
+    model_path, meta_path = _model_paths(network_id)
+    if not os.path.exists(model_path) or not os.path.exists(meta_path):
         raise FileNotFoundError(
             "Model not trained yet. Call /api/ml/train first."
         )
 
-    models = joblib.load(MODEL_PATH)
-    meta   = joblib.load(META_PATH)
+    models = joblib.load(model_path)
+    meta   = joblib.load(meta_path)
 
     now          = datetime.now(APP_TIMEZONE).replace(tzinfo=None)
     predictions  = []
@@ -345,26 +359,28 @@ def predict_next_hours(n_hours: int = 6) -> list:
     return predictions
 
 
-def get_model_info() -> dict:
+def get_model_info(network_id=None) -> dict:
     """Return metadata about the currently saved model."""
-    if not os.path.exists(META_PATH):
-        return {"trained": False}
-    meta = joblib.load(META_PATH)
+    _, meta_path = _model_paths(network_id)
+    if not os.path.exists(meta_path):
+        return {"trained": False, "network_id": network_id}
+    meta = joblib.load(meta_path)
     return {
         "trained":    True,
+        "network_id": meta.get("network_id"),
         "trained_at": meta.get("trained_at"),
         "n_samples":  meta.get("n_samples"),
         "metrics":    meta.get("metrics"),
     }
 
 
-def get_best_usage_hours(n_hours: int = 24) -> list:
+def get_best_usage_hours(n_hours: int = 24, network_id=None) -> list:
     """
     Predict the next 24 hours and rank them by expected download speed.
     Useful for showing students the best time to use the internet.
     """
     try:
-        preds = predict_next_hours(n_hours)
+        preds = predict_next_hours(n_hours, network_id=network_id)
         ranked = sorted(preds,
                         key=lambda x: x["download_mbps"]["value"],
                         reverse=True)

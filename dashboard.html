@@ -175,6 +175,8 @@ canvas { max-height:200px; }
     </div>
     <div class="nav-right">
       <div class="live-badge"><div class="live-dot"></div>Live</div>
+      <label for="network-select" style="font-size:12px;color:var(--t3)">Wi-Fi</label>
+      <select id="network-select" onchange="selectNetwork(this.value)" style="max-width:190px;background:#1c1c1e;color:var(--text);border:1px solid var(--border);border-radius:9px;padding:8px;font:inherit"></select>
       <div id="nav-clock">--:--:--</div>
       <a href="/predictor_dashboard.html" class="btn-ghost">🔮 AI Predict</a>
       <button class="btn-run" onclick="triggerCollection()">Run Test</button>
@@ -292,6 +294,21 @@ canvas { max-height:200px; }
 <script>
 const API='/api';
 let historyHours=6;
+let selectedNetworkId=null;
+function networkQuery(){return selectedNetworkId?`&network_id=${encodeURIComponent(selectedNetworkId)}`:'';}
+async function loadNetworks(){
+  try{
+    const j=await(await fetch(`${API}/networks`)).json();
+    if(j.status!=='ok') return;
+    const networks=j.data.networks||[], sel=document.getElementById('network-select');
+    if(!networks.length){sel.innerHTML='<option value="">No measured networks</option>';selectedNetworkId=null;return;}
+    selectedNetworkId=selectedNetworkId||networks[0].network_id;
+    sel.innerHTML=networks.map(n=>`<option value="${n.network_id}">${(n.ssid||'Unknown')} (${n.tests} tests)</option>`).join('');
+    if(!networks.some(n=>n.network_id===selectedNetworkId)) selectedNetworkId=networks[0].network_id;
+    sel.value=selectedNetworkId;
+  }catch(e){console.warn('Network list failed',e);}
+}
+function selectNetwork(id){selectedNetworkId=id||null;refreshAll();}
 
 /* clock */
 function tick(){ document.getElementById('nav-clock').textContent=new Date().toTimeString().slice(0,8); }
@@ -362,7 +379,7 @@ function applyStatus(wrapId, cardId, fillId, pct, status, fillColor){
 
 async function loadLatest(){
   try{
-    const j=await(await fetch(`${API}/latest`)).json();
+    const j=await(await fetch(`${API}/latest?network_id=${encodeURIComponent(selectedNetworkId||'')}`)).json();
     if(j.status!=='ok') return;
     const d=j.data;
     setKPI('kpi-dl', d.download_mbps.toFixed(1),'Mbps');
@@ -392,7 +409,7 @@ async function loadLatest(){
 
 async function loadHistory(){
   try{
-    const j=await(await fetch(`${API}/history?hours=${historyHours}&limit=300`)).json();
+    const j=await(await fetch(`${API}/history?hours=${historyHours}&limit=300${networkQuery()}`)).json();
     if(j.status!=='ok') return;
     const rows=j.data.rows;
     const labels=rows.map(r=>r.timestamp.slice(11,16));
@@ -416,7 +433,7 @@ function setRange(h,btn){
 
 async function loadSummary(){
   try{
-    const j=await(await fetch(`${API}/summary`)).json();
+    const j=await(await fetch(`${API}/summary?network_id=${encodeURIComponent(selectedNetworkId||'')}`)).json();
     if(j.status!=='ok') return;
     const s=j.data, f=(v,u)=>v!=null?`${v} ${u}`:'--';
     document.getElementById('s-avg-dl').textContent  =f(s.avg_download,'Mbps');
@@ -434,7 +451,7 @@ async function loadSummary(){
 
 async function loadAlerts(){
   try{
-    const j=await(await fetch(`${API}/alerts?limit=6`)).json();
+    const j=await(await fetch(`${API}/alerts?limit=6${networkQuery()}`)).json();
     if(j.status!=='ok') return;
     const alerts=j.data.alerts;
     document.getElementById('alert-count').textContent=`${alerts.length} recent`;
@@ -450,7 +467,7 @@ async function loadAlerts(){
 
 async function loadHeatmap(){
   try{
-    const j=await(await fetch(`${API}/stats/peak-hours`)).json();
+    const j=await(await fetch(`${API}/stats/peak-hours?network_id=${encodeURIComponent(selectedNetworkId||'')}`)).json();
     if(j.status!=='ok') return;
     const byHour={};
     j.data.forEach(r=>byHour[r.hour_of_day]=r.avg_download||0);
@@ -506,7 +523,7 @@ async function triggerCollection() {
 async function refreshAll(){
   await Promise.all([loadLatest(),loadHistory(),loadSummary(),loadAlerts(),loadHeatmap()]);
 }
-refreshAll();
+(async()=>{await loadNetworks(); await refreshAll();})();
 setInterval(refreshAll,30000);
 </script>
 </body>

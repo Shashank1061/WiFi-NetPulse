@@ -217,7 +217,7 @@ def check_and_raise_alerts(metrics: dict):
         if value is not None and condition(value, threshold):
             message = msg_tmpl.format(v=value, t=threshold)
             log.warning(f"[ALERT] {message}")
-            insert_alert(alert_type, metric_name, value, threshold, message)
+            insert_alert(alert_type, metric_name, value, threshold, message, metrics.get("network_id"))
 
 
 # ─── Main Collection Job ──────────────────────────────────────────────────────

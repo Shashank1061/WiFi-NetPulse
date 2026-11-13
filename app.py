@@ -12,7 +12,7 @@ import os
 from database import (
     init_db, get_latest_metric, get_metrics_history,
     get_hourly_averages, get_daily_summary, get_recent_alerts, get_peak_hours,
-    insert_metric, get_networks,
+    insert_metric, insert_alert, get_networks,
 )
 
 app = Flask(__name__, static_folder="static")
@@ -47,7 +47,7 @@ def api_status():
 
 @app.route("/api/latest")
 def api_latest():
-    metric = get_latest_metric()
+    metric = get_latest_metric(request.args.get("network_id"))
     if not metric:
         return error("No data collected yet.", 404)
     return success(metric)
@@ -59,7 +59,7 @@ def api_history():
         limit = max(10, min(int(request.args.get("limit", 200)), 1000))
     except ValueError:
         return error("Invalid query parameters.")
-    return success({"rows": get_metrics_history(hours, limit)})
+    return success({"rows": get_metrics_history(hours, limit, request.args.get("network_id"))})
 
 
 @app.route("/api/ingest", methods=["POST"])
@@ -89,6 +89,20 @@ def api_ingest():
                   str(payload.get("server_name") or "")[:255],
                   str(payload.get("ip_address") or "")[:64],
                   ssid=ssid, network_id=network_id, source="local")
+    # Create cloud-side alerts so they are visible and filterable by this network.
+    alert_checks = [
+        ("slow_speed", "download_mbps", download, 5.0, download < 5.0,
+         f"Low download speed: {download} Mbps (threshold: 5.0 Mbps)"),
+        ("slow_speed", "upload_mbps", upload, 2.0, upload < 2.0,
+         f"Low upload speed: {upload} Mbps (threshold: 2.0 Mbps)"),
+        ("high_latency", "latency_ms", latency, 150.0, latency > 150.0,
+         f"High latency: {latency} ms (threshold: 150.0 ms)"),
+        ("packet_loss", "packet_loss_pct", loss, 5.0, loss > 5.0,
+         f"Packet loss detected: {loss}% (threshold: 5.0%)"),
+    ]
+    for alert_type, metric_name, value, threshold, triggered, message in alert_checks:
+        if triggered:
+            insert_alert(alert_type, metric_name, value, threshold, message, network_id)
     return success({"message": "Local measurement saved.", "ssid": ssid,
                     "network_id": network_id, "source": "local"}), 201
 
@@ -102,11 +116,11 @@ def api_hourly():
         days = max(1, min(int(request.args.get("days", 7)), 30))
     except ValueError:
         return error("Invalid days parameter.")
-    return success({"rows": get_hourly_averages(days)})
+    return success({"rows": get_hourly_averages(days, request.args.get("network_id"))})
 
 @app.route("/api/summary")
 def api_summary():
-    return success(get_daily_summary())
+    return success(get_daily_summary(request.args.get("network_id")))
 
 @app.route("/api/alerts")
 def api_alerts():
@@ -114,7 +128,7 @@ def api_alerts():
         limit = max(1, min(int(request.args.get("limit", 10)), 100))
     except ValueError:
         return error("Invalid limit parameter.")
-    alerts = get_recent_alerts(limit)
+    alerts = get_recent_alerts(limit, request.args.get("network_id"))
     return success({"alerts": alerts, "count": len(alerts)})
 
 def require_admin_key():
@@ -145,7 +159,7 @@ def api_collect():
 
 @app.route("/api/stats/peak-hours")
 def api_peak_hours():
-    return success(get_peak_hours())
+    return success(get_peak_hours(request.args.get("network_id")))
 
 # ── ML Endpoints ──────────────────────────────────────────────
 
@@ -156,7 +170,7 @@ def api_ml_train():
         return denied
     try:
         from predictor import train_model
-        result = train_model()
+        result = train_model(network_id=request.args.get("network_id"))
         return success(result) if result["success"] else error(result["message"], 422)
     except Exception as e:
         return error(str(e), 500)
@@ -169,7 +183,7 @@ def api_ml_predict():
         return error("Invalid hours parameter.")
     try:
         from predictor import predict_next_hours
-        preds = predict_next_hours(hours)
+        preds = predict_next_hours(hours, network_id=request.args.get("network_id"))
         return success({"predictions": preds, "count": len(preds),
                         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
     except FileNotFoundError as e:
@@ -181,7 +195,7 @@ def api_ml_predict():
 def api_ml_best_hours():
     try:
         from predictor import get_best_usage_hours
-        return success({"best_hours": get_best_usage_hours(24)})
+        return success({"best_hours": get_best_usage_hours(24, network_id=request.args.get("network_id"))})
     except FileNotFoundError as e:
         return error(str(e), 404)
     except Exception as e:
@@ -191,7 +205,7 @@ def api_ml_best_hours():
 def api_ml_info():
     try:
         from predictor import get_model_info
-        return success(get_model_info())
+        return success(get_model_info(request.args.get("network_id")))
     except Exception as e:
         return error(str(e), 500)
 

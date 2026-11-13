@@ -83,6 +83,7 @@ alerts = Table(
     Column("value", Float),
     Column("threshold", Float),
     Column("message", Text),
+    Column("network_id", String(64)),
 )
 
 
@@ -123,6 +124,9 @@ def init_db():
         for name, kind in {"ssid": "VARCHAR(255)", "network_id": "VARCHAR(64)", "source": "VARCHAR(32) DEFAULT 'cloud'"}.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE network_metrics ADD COLUMN {name} {kind}"))
+        alert_columns = {col["name"] for col in inspect(engine).get_columns("alerts")}
+        if "network_id" not in alert_columns:
+            conn.execute(text("ALTER TABLE alerts ADD COLUMN network_id VARCHAR(64)"))
     print(f"[DB] Database initialized ({engine.dialect.name}).")
 
 
@@ -143,27 +147,31 @@ def insert_metric(download, upload, latency, packet_loss=0.0,
         conn.execute(insert(network_metrics).values(**values))
 
 
-def insert_alert(alert_type, metric, value, threshold, message):
+def insert_alert(alert_type, metric, value, threshold, message, network_id=None):
     with engine.begin() as conn:
         conn.execute(insert(alerts).values(
             timestamp=_utc_now(), alert_type=alert_type, metric=metric,
-            value=value, threshold=threshold, message=message,
+            value=value, threshold=threshold, message=message, network_id=network_id,
         ))
 
 
-def get_latest_metric():
-    stmt = select(network_metrics).order_by(network_metrics.c.timestamp.desc()).limit(1)
+def _network_filter(stmt, network_id):
+    return stmt.where(network_metrics.c.network_id == network_id) if network_id else stmt
+
+
+def get_latest_metric(network_id=None):
+    stmt = _network_filter(select(network_metrics), network_id).order_by(network_metrics.c.timestamp.desc()).limit(1)
     with engine.connect() as conn:
         row = conn.execute(stmt).mappings().first()
     return _serialize(row) if row else None
 
 
-def get_metrics_history(hours=24, limit=200):
+def get_metrics_history(hours=24, limit=200, network_id=None):
     since = _utc_now() - timedelta(hours=hours)
     stmt = (select(network_metrics)
             .where(network_metrics.c.timestamp >= since)
-            .order_by(network_metrics.c.timestamp.asc())
-            .limit(limit))
+            .order_by(network_metrics.c.timestamp.asc()))
+    stmt = _network_filter(stmt, network_id).limit(limit)
     with engine.connect() as conn:
         rows = conn.execute(stmt).mappings().all()
     return [_serialize(row) for row in rows]
@@ -180,7 +188,7 @@ def get_networks():
         rows = conn.execute(stmt).mappings().all()
     return [_serialize(row) for row in rows]
 
-def get_hourly_averages(days=7):
+def get_hourly_averages(days=7, network_id=None):
     since = _utc_now() - timedelta(days=days)
     if engine.dialect.name == "postgresql":
         local_timestamp = func.timezone(APP_TIMEZONE.key, network_metrics.c.timestamp)
@@ -205,12 +213,13 @@ def get_hourly_averages(days=7):
             .where(network_metrics.c.timestamp >= since)
             .group_by(bucket)
             .order_by(bucket.asc()))
+    stmt = _network_filter(stmt, network_id)
     with engine.connect() as conn:
         rows = conn.execute(stmt).mappings().all()
     return [_serialize(row) for row in rows]
 
 
-def get_daily_summary():
+def get_daily_summary(network_id=None):
     local_now = datetime.now(APP_TIMEZONE)
     local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     local_end = local_start + timedelta(days=1)
@@ -225,19 +234,23 @@ def get_daily_summary():
         func.round(cast(func.min(network_metrics.c.latency_ms), Numeric), 2).label("best_latency"),
         func.count().label("total_tests"),
     ).where(network_metrics.c.timestamp >= start, network_metrics.c.timestamp < end)
+    stmt = _network_filter(stmt, network_id)
     with engine.connect() as conn:
         row = conn.execute(stmt).mappings().first()
     return dict(row) if row else {}
 
 
-def get_recent_alerts(limit=10):
-    stmt = select(alerts).order_by(alerts.c.timestamp.desc()).limit(limit)
+def get_recent_alerts(limit=10, network_id=None):
+    stmt = select(alerts)
+    if network_id:
+        stmt = stmt.where(alerts.c.network_id == network_id)
+    stmt = stmt.order_by(alerts.c.timestamp.desc()).limit(limit)
     with engine.connect() as conn:
         rows = conn.execute(stmt).mappings().all()
     return [_serialize(row) for row in rows]
 
 
-def get_peak_hours():
+def get_peak_hours(network_id=None):
     if engine.dialect.name == "postgresql":
         local_timestamp = func.timezone(APP_TIMEZONE.key, network_metrics.c.timestamp)
         hour = func.cast(func.extract("hour", local_timestamp), Integer)
@@ -257,6 +270,7 @@ func.round(cast(func.avg(network_metrics.c.latency_ms), Numeric), 2).label("avg_
                 func.count().label("samples"),
             )
             .group_by(hour).order_by(hour))
+    stmt = _network_filter(stmt, network_id)
     with engine.connect() as conn:
         rows = conn.execute(stmt).mappings().all()
     return [dict(row) for row in rows]

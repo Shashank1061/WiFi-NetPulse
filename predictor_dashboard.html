@@ -165,6 +165,7 @@ canvas{max-height:220px;}
     </div>
     <div class="nav-right">
       <a href="/" class="btn btn-ghost">← Dashboard</a>
+      <select id="network-select" onchange="selectNetwork(this.value)" style="max-width:190px;background:#1c1c1e;color:var(--text);border:1px solid var(--border);border-radius:9px;padding:8px;font:inherit"></select>
       <button class="btn btn-primary" id="train-btn" onclick="trainModel()">Train Model</button>
     </div>
   </nav>
@@ -259,7 +260,18 @@ canvas{max-height:220px;}
 
 <script>
 const API='/api';
-let forecastHours=6, forecastChart=null;
+let forecastHours=6, forecastChart=null, selectedNetworkId=null;
+function networkQuery(){return selectedNetworkId?`&network_id=${encodeURIComponent(selectedNetworkId)}`:'';}
+async function loadNetworks(){
+  try{const j=await(await fetch(`${API}/networks`)).json();if(j.status!=='ok')return;
+    const networks=j.data.networks||[],sel=document.getElementById('network-select');
+    if(!networks.length){sel.innerHTML='<option value="">No measured networks</option>';return;}
+    selectedNetworkId=selectedNetworkId||networks[0].network_id;
+    if(!networks.some(n=>n.network_id===selectedNetworkId))selectedNetworkId=networks[0].network_id;
+    sel.innerHTML=networks.map(n=>`<option value="${n.network_id}">${n.ssid||'Unknown'} (${n.tests} tests)</option>`).join('');sel.value=selectedNetworkId;
+  }catch(e){console.warn(e);}
+}
+function selectNetwork(id){selectedNetworkId=id||null;loadModelInfo();loadPredictions();loadBestHours();}
 
 /* toast */
 function toast(msg,d=3000){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),d); }
@@ -346,7 +358,7 @@ function renderModelMetrics(info){
 
 async function loadModelInfo(){
   try{
-    const j=await(await fetch(`${API}/ml/info`)).json();
+    const j=await(await fetch(`${API}/ml/info?network_id=${encodeURIComponent(selectedNetworkId||'')}`)).json();
     if(j.status!=='ok') return;
     const info=j.data;
     const dot=document.getElementById('model-dot'), txt=document.getElementById('model-status-text');
@@ -363,7 +375,7 @@ async function loadModelInfo(){
 
 async function loadPredictions(){
   try{
-    const j=await(await fetch(`${API}/ml/predict?hours=${forecastHours}`)).json();
+    const j=await(await fetch(`${API}/ml/predict?hours=${forecastHours}${networkQuery()}`)).json();
     if(j.status!=='ok'){ if(j.message?.includes('not trained')){ renderCards([]); } return; }
     const preds=j.data.predictions;
     document.getElementById('gen-at').textContent=`Generated: ${j.data.generated_at}`;
@@ -373,7 +385,7 @@ async function loadPredictions(){
 
 async function loadBestHours(){
   try{
-    const j=await(await fetch(`${API}/ml/best-hours`)).json();
+    const j=await(await fetch(`${API}/ml/best-hours?network_id=${encodeURIComponent(selectedNetworkId||'')}`)).json();
     if(j.status==='ok') renderBestHours(j.data.best_hours);
   }catch(e){}
 }
@@ -382,7 +394,7 @@ async function trainModel(){
   setLoading(true,'Training Random Forest on your network data…');
   document.getElementById('train-btn').disabled=true;
   try{
-    const j=await(await fetch(`${API}/ml/train`,{method:'POST'})).json();
+    const j=await(await fetch(`${API}/ml/train?network_id=${encodeURIComponent(selectedNetworkId||'')}`,{method:'POST'})).json();
     if(j.status==='ok'){
       toast(`✓ Model trained on ${j.data.samples} samples!`,4000);
       await loadModelInfo(); await loadPredictions(); await loadBestHours();
@@ -402,9 +414,7 @@ function setRange(h,btn){
 async function refresh(){ await loadPredictions(); await loadBestHours(); toast('↺ Predictions refreshed'); }
 
 initChart();
-loadModelInfo();
-loadPredictions();
-loadBestHours();
+(async()=>{await loadNetworks();await loadModelInfo();await loadPredictions();await loadBestHours();})();
 </script>
 </body>
 </html>
