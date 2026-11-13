@@ -260,6 +260,7 @@ canvas{max-height:220px;}
 
 <script>
 const API='/api';
+const LOCAL_AGENT='http://127.0.0.1:8765';
 let forecastHours=6, forecastChart=null, selectedNetworkId=null;
 function networkQuery(){return selectedNetworkId?`&network_id=${encodeURIComponent(selectedNetworkId)}`:'';}
 async function loadNetworks(){
@@ -391,17 +392,39 @@ async function loadBestHours(){
 }
 
 async function trainModel(){
-  setLoading(true,'Training Random Forest on your network data…');
+  if(!selectedNetworkId){toast('Select a Wi-Fi network before training.',4000);return;}
+  setLoading(true,'Connecting to your local agent…');
   document.getElementById('train-btn').disabled=true;
   try{
-    const j=await(await fetch(`${API}/ml/train?network_id=${encodeURIComponent(selectedNetworkId||'')}`,{method:'POST'})).json();
-    if(j.status==='ok'){
-      toast(`✓ Model trained on ${j.data.samples} samples!`,4000);
-      await loadModelInfo(); await loadPredictions(); await loadBestHours();
-    } else { toast(`✗ ${j.message}`,5000); }
-  } catch(e){ toast('✗ Could not reach the API. Is app.py running?',5000); }
-  setLoading(false);
-  document.getElementById('train-btn').disabled=false;
+    const startResponse=await fetch(`${LOCAL_AGENT}/train`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-WiFi-NetPulse-Request':'dashboard'},
+      body:JSON.stringify({network_id:selectedNetworkId})
+    });
+    const started=await startResponse.json();
+    if(!startResponse.ok||started.status!=='ok')throw new Error(started.message||`Local agent returned HTTP ${startResponse.status}`);
+
+    let result=null;
+    for(let attempt=0;attempt<310;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,2000));
+      const response=await fetch(`${LOCAL_AGENT}/train/status`);
+      const status=await response.json();
+      if(!status.busy){
+        if(status.success){result=status.result||{};break;}
+        throw new Error(status.error||status.message||'Model training failed.');
+      }
+      setLoading(true,`Training model… (${Math.min((attempt+1)*2,600)}s)`);
+    }
+    if(!result)throw new Error('Training is taking longer than 10 minutes. Check the local agent terminal and refresh model status.');
+    toast(`✓ Model trained on ${result.samples??result.rows??'available'} samples!`,5000);
+    await loadModelInfo(); await loadPredictions(); await loadBestHours();
+  }catch(e){
+    const message=e.message||'Could not reach the local agent.';
+    toast(`✗ ${message}`,7000);
+  }finally{
+    setLoading(false);
+    document.getElementById('train-btn').disabled=false;
+  }
 }
 
 function setRange(h,btn){
