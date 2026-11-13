@@ -12,6 +12,7 @@ import os
 from database import (
     init_db, get_latest_metric, get_metrics_history,
     get_hourly_averages, get_daily_summary, get_recent_alerts, get_peak_hours,
+    insert_metric, get_networks,
 )
 
 app = Flask(__name__, static_folder="static")
@@ -59,6 +60,41 @@ def api_history():
     except ValueError:
         return error("Invalid query parameters.")
     return success({"rows": get_metrics_history(hours, limit)})
+
+
+@app.route("/api/ingest", methods=["POST"])
+def api_ingest():
+    key = os.getenv("INGEST_API_KEY")
+    supplied = request.headers.get("X-Ingest-Key", "")
+    if not key:
+        return error("INGEST_API_KEY is not configured.", 503)
+    import hmac
+    if not hmac.compare_digest(supplied, key):
+        return error("Unauthorized local collector.", 401)
+    payload = request.get_json(silent=True) or {}
+    try:
+        download = float(payload["download_mbps"]); upload = float(payload["upload_mbps"])
+        latency = float(payload.get("latency_ms") or 0)
+        loss = float(payload.get("packet_loss_pct") or 0)
+        jitter = float(payload.get("jitter_ms") or 0)
+    except (KeyError, TypeError, ValueError):
+        return error("Valid download_mbps and upload_mbps are required.")
+    vals = (download, upload, latency, loss, jitter)
+    if any(v < 0 or not __import__("math").isfinite(v) for v in vals):
+        return error("Measurement values must be finite and non-negative.")
+    ssid = str(payload.get("ssid") or "Unknown")[:255]
+    network_id = str(payload.get("network_id") or "")[:64] or None
+    insert_metric(download, upload, latency, loss, jitter,
+                  str(payload.get("isp") or "")[:255],
+                  str(payload.get("server_name") or "")[:255],
+                  str(payload.get("ip_address") or "")[:64],
+                  ssid=ssid, network_id=network_id, source="local")
+    return success({"message": "Local measurement saved.", "ssid": ssid,
+                    "network_id": network_id, "source": "local"}), 201
+
+@app.route("/api/networks")
+def api_networks():
+    return success({"networks": get_networks()})
 
 @app.route("/api/hourly")
 def api_hourly():

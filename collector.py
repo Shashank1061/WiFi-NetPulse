@@ -14,6 +14,11 @@ import statistics
 import schedule
 import logging
 import json
+import os
+import re
+import hashlib
+import urllib.request
+import urllib.error
 from datetime import datetime
 
 import speedtest
@@ -146,6 +151,41 @@ def measure_speed():
         return None
 
 
+
+# Local Wi-Fi identity and secure cloud upload.
+def detect_wifi_network():
+    if platform.system().lower() != "windows":
+        return "Unknown", None
+    try:
+        r = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True,
+                           text=True, timeout=10, encoding="utf-8", errors="replace")
+        ss = re.search(r"^\s*SSID\s*:\s*(.+?)\s*$", r.stdout, re.M)
+        bs = re.search(r"^\s*BSSID\s*:\s*([0-9a-fA-F:-]+)", r.stdout, re.M)
+        ssid = ss.group(1).strip() if ss else "Unknown"
+        bssid = bs.group(1).lower() if bs else ""
+        if ssid == "Unknown": return ssid, None
+        # Hash SSID + BSSID; the raw access-point MAC is never uploaded.
+        return ssid, hashlib.sha256(f"{ssid}|{bssid}".encode()).hexdigest()[:32]
+    except Exception as exc:
+        log.warning("Wi-Fi detection failed: %s", exc)
+        return "Unknown", None
+
+
+def send_to_cloud(metrics, remote_url, api_key):
+    endpoint = remote_url.rstrip("/")
+    if not endpoint.endswith("/api/ingest"): endpoint += "/api/ingest"
+    req = urllib.request.Request(endpoint, data=json.dumps(metrics).encode(), method="POST",
+        headers={"Content-Type": "application/json", "X-Ingest-Key": api_key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = response.read().decode("utf-8", errors="replace")
+            log.info("Cloud ingestion response: %s", result)
+            return result
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Cloud ingestion failed ({exc.code}): {exc.read().decode(errors='replace')}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Cannot reach cloud API: {exc}")
+
 # ─── Alert Checker ───────────────────────────────────────────────────────────
 
 def check_and_raise_alerts(metrics: dict):
@@ -182,54 +222,43 @@ def check_and_raise_alerts(metrics: dict):
 
 # ─── Main Collection Job ──────────────────────────────────────────────────────
 
-def collect():
-    """Single collection cycle: latency first (fast), then speed test."""
-    log.info("=" * 55)
-    log.info(f"Collection started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    # 1. Latency & packet loss (fast — ~5 seconds)
+def collect(remote_url=None, api_key=None):
+    """Run measurements on this machine; optionally upload them to Render."""
+    log.info("Collection started at %s", datetime.now().isoformat(timespec="seconds"))
+    ssid, network_id = detect_wifi_network()
+    log.info("Connected Wi-Fi: %s", ssid)
     lat = measure_latency()
-
-    # 2. Speed test (slow — ~20-30 seconds)
     spd = measure_speed()
-
     if spd is None:
-        log.error("Skipping DB insert — speed test unavailable.")
-        return
-
-    combined = {**lat, **spd}
-
-    # 3. Persist to database
-    insert_metric(
-        download    = combined["download_mbps"],
-        upload      = combined["upload_mbps"],
-        latency     = combined["latency_ms"] or 0,
-        packet_loss = combined["packet_loss_pct"] or 0,
-        jitter      = combined["jitter_ms"] or 0,
-        isp         = combined["isp"],
-        server      = combined["server_name"],
-        ip          = combined["ip_address"],
-    )
-    log.info("Metrics saved to database.")
-
-    # 4. Check thresholds
-    check_and_raise_alerts(combined)
-
+        log.error("Speed test unavailable; no record saved.")
+        return None
+    data = {**lat, **spd, "ssid": ssid, "network_id": network_id}
+    if remote_url:
+        if not api_key: raise RuntimeError("WIFI_NETPULSE_API_KEY is required for cloud upload.")
+        send_to_cloud(data, remote_url, api_key)
+        log.info("Local measurement uploaded for network '%s'.", ssid)
+    else:
+        insert_metric(download=data["download_mbps"], upload=data["upload_mbps"],
+            latency=data["latency_ms"] or 0, packet_loss=data["packet_loss_pct"] or 0,
+            jitter=data["jitter_ms"] or 0, isp=data["isp"], server=data["server_name"],
+            ip=data["ip_address"], ssid=ssid, network_id=network_id, source="local-development")
+        log.info("Measurement saved to local development database.")
+    check_and_raise_alerts(data)
     log.info("Collection complete.")
-    log.info("=" * 55)
+    return data
 
 
 # ─── Scheduler ───────────────────────────────────────────────────────────────
 
-def run_scheduler(interval_minutes: int = 15):
+def run_scheduler(interval_minutes: int = 15, remote_url=None, api_key=None):
     """
     Run the collector on a schedule.
     Default: every 15 minutes.
     """
     log.info(f"Scheduler started — collecting every {interval_minutes} min.")
-    collect()  # Run immediately on start
+    collect(remote_url=remote_url, api_key=api_key)  # Run immediately on start
 
-    schedule.every(interval_minutes).minutes.do(collect)
+    schedule.every(interval_minutes).minutes.do(lambda: collect(remote_url=remote_url, api_key=api_key))
 
     while True:
         schedule.run_pending()
@@ -245,9 +274,14 @@ if __name__ == "__main__":
                         help="Collection interval in minutes (default: 15)")
     parser.add_argument("--once", action="store_true",
                         help="Run once and exit (no scheduler)")
+    parser.add_argument("--remote-url", default=os.getenv("WIFI_NETPULSE_API_URL"),
+                        help="Cloud URL, e.g. https://wifi-netpulse.onrender.com")
+    parser.add_argument("--api-key", default=os.getenv("WIFI_NETPULSE_API_KEY"),
+                        help="Ingestion key; prefer environment variable")
     args = parser.parse_args()
-
+    if args.remote_url and not args.api_key:
+        parser.error("Set WIFI_NETPULSE_API_KEY when using --remote-url")
     if args.once:
-        collect()
+        collect(remote_url=args.remote_url, api_key=args.api_key)
     else:
-        run_scheduler(args.interval)
+        run_scheduler(args.interval, remote_url=args.remote_url, api_key=args.api_key)

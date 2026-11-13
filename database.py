@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     Column, DateTime, Float, Integer, MetaData, String, Table, Text,
-    create_engine, func, insert, select,
+    create_engine, func, insert, select, inspect, text,
 )
 from sqlalchemy.engine import URL
 
@@ -56,6 +56,9 @@ network_metrics = Table(
     Column("isp", String(255)),
     Column("server_name", String(255)),
     Column("ip_address", String(64)),
+    Column("ssid", String(255)),
+    Column("network_id", String(64)),
+    Column("source", String(32), server_default="cloud"),
 )
 
 hourly_summary = Table(
@@ -114,11 +117,16 @@ def _utc_now():
 def init_db():
     """Create missing tables. Safe to run repeatedly during deployment."""
     metadata.create_all(engine)
+    existing = {col["name"] for col in inspect(engine).get_columns("network_metrics")}
+    with engine.begin() as conn:
+        for name, kind in {"ssid": "VARCHAR(255)", "network_id": "VARCHAR(64)", "source": "VARCHAR(32) DEFAULT 'cloud'"}.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE network_metrics ADD COLUMN {name} {kind}"))
     print(f"[DB] Database initialized ({engine.dialect.name}).")
 
 
 def insert_metric(download, upload, latency, packet_loss=0.0,
-                  jitter=0.0, isp="", server="", ip=""):
+                  jitter=0.0, isp="", server="", ip="", ssid=None, network_id=None, source="cloud"):
     values = {
         "timestamp": _utc_now(),
         "download_mbps": download,
@@ -128,7 +136,7 @@ def insert_metric(download, upload, latency, packet_loss=0.0,
         "jitter_ms": jitter,
         "isp": isp,
         "server_name": server,
-        "ip_address": ip,
+        "ip_address": ip, "ssid": ssid, "network_id": network_id, "source": source,
     }
     with engine.begin() as conn:
         conn.execute(insert(network_metrics).values(**values))
@@ -159,6 +167,17 @@ def get_metrics_history(hours=24, limit=200):
         rows = conn.execute(stmt).mappings().all()
     return [_serialize(row) for row in rows]
 
+
+
+def get_networks():
+    stmt = (select(network_metrics.c.ssid, network_metrics.c.network_id,
+                   func.count().label("tests"), func.max(network_metrics.c.timestamp).label("last_seen"))
+            .where(network_metrics.c.network_id.is_not(None))
+            .group_by(network_metrics.c.ssid, network_metrics.c.network_id)
+            .order_by(func.max(network_metrics.c.timestamp).desc()))
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_serialize(row) for row in rows]
 
 def get_hourly_averages(days=7):
     since = _utc_now() - timedelta(days=days)
