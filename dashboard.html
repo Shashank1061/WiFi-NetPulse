@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>NetPulse — WiFi Monitor</title>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --black:#000; --g1:#0a0a0a; --g2:#141414; --g3:#1c1c1e; --g4:#2c2c2e; --g5:#3a3a3c; --g6:#48484a;
+  --text:#f5f5f7; --t2:#a1a1a6; --t3:#6e6e73;
+  --blue:#0a84ff; --blue2:#409cff; --green:#30d158; --yellow:#ffd60a;
+  --orange:#ff9f0a; --red:#ff453a; --teal:#5ac8fa;
+  --font:'Figtree',-apple-system,BlinkMacSystemFont,sans-serif;
+}
+html { scroll-behavior:smooth; }
+body {
+  background:var(--black); color:var(--text); font-family:var(--font);
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  min-height:100vh; overflow-x:hidden;
+}
+.bg-glow {
+  position:fixed; inset:0; pointer-events:none; z-index:0;
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 20%,rgba(10,132,255,.07) 0%,transparent 60%),
+    radial-gradient(ellipse 50% 35% at 80% 70%,rgba(48,209,88,.04) 0%,transparent 60%);
+}
+.page { position:relative; z-index:1; max-width:1200px; margin:0 auto; padding:0 24px 60px; }
+
+/* NAV */
+nav {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:20px 0 32px; animation:fadeDown .6s ease both;
+}
+.nav-brand { display:flex; align-items:center; gap:10px; }
+.nav-icon {
+  width:32px; height:32px;
+  background:linear-gradient(135deg,var(--blue),var(--teal));
+  border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px;
+}
+.nav-title { font-size:17px; font-weight:700; letter-spacing:-.3px; }
+.nav-right  { display:flex; align-items:center; gap:12px; }
+.live-badge { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--green); }
+.live-dot   { width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s ease infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(.85)} }
+#nav-clock  { font-size:13px; font-weight:500; color:var(--t2); font-variant-numeric:tabular-nums; }
+.btn-run {
+  padding:8px 18px; background:var(--blue); color:#fff;
+  font-family:var(--font); font-size:13px; font-weight:600;
+  border:none; border-radius:980px; cursor:pointer;
+  transition:all .2s cubic-bezier(.25,.46,.45,.94);
+}
+.btn-run:hover  { background:var(--blue2); transform:scale(1.03); }
+.btn-run:active { transform:scale(.97); }
+.btn-ghost {
+  padding:8px 18px; background:rgba(255,255,255,.08); color:var(--text);
+  font-family:var(--font); font-size:13px; font-weight:600;
+  border:none; border-radius:980px; cursor:pointer; text-decoration:none;
+  transition:all .2s; display:inline-block; backdrop-filter:blur(10px);
+}
+.btn-ghost:hover { background:rgba(255,255,255,.14); }
+
+/* SECTION LABEL */
+.section-label {
+  font-size:11px; font-weight:600; letter-spacing:1px;
+  text-transform:uppercase; color:var(--t3); margin-bottom:14px; padding-left:2px;
+}
+
+/* KPI CARDS */
+.kpi-row {
+  display:grid; grid-template-columns:repeat(4,1fr);
+  gap:12px; margin-bottom:32px;
+}
+.kpi-card {
+  background:var(--g3); border-radius:20px; padding:22px 22px 20px;
+  position:relative; overflow:hidden;
+  border:1px solid rgba(255,255,255,.06);
+  transition:transform .25s cubic-bezier(.25,.46,.45,.94), box-shadow .25s ease;
+  animation:fadeUp .5s ease both;
+}
+.kpi-card:hover { transform:translateY(-3px); box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.kpi-card:nth-child(1){animation-delay:.05s} .kpi-card:nth-child(2){animation-delay:.10s}
+.kpi-card:nth-child(3){animation-delay:.15s} .kpi-card:nth-child(4){animation-delay:.20s}
+.kpi-card::before {
+  content:''; position:absolute; top:-40px; right:-40px;
+  width:120px; height:120px; border-radius:50%;
+  background:var(--cg,rgba(10,132,255,.14)); filter:blur(30px); pointer-events:none;
+}
+.kpi-label { font-size:12px; font-weight:500; color:var(--t3); margin-bottom:14px; display:flex; align-items:center; gap:6px; }
+.kpi-icon  { font-size:14px; }
+.kpi-value {
+  font-size:42px; font-weight:700; letter-spacing:-2px; line-height:1;
+  color:var(--text); font-variant-numeric:tabular-nums; transition:color .4s;
+}
+.kpi-unit  { font-size:16px; font-weight:400; color:var(--t2); letter-spacing:0; margin-left:2px; }
+.kpi-sub   { font-size:12px; font-weight:500; color:var(--t3); margin-top:10px; }
+.kpi-track { height:3px; border-radius:2px; background:rgba(255,255,255,.08); margin-top:14px; overflow:hidden; }
+.kpi-fill  { height:100%; border-radius:2px; background:var(--fc,var(--blue)); transition:width 1.2s cubic-bezier(.25,.46,.45,.94); }
+.sg .kpi-card { --cg:rgba(48,209,88,.18); } .sg .kpi-value { color:var(--green); }
+.sw .kpi-card { --cg:rgba(255,159,10,.18); } .sw .kpi-value { color:var(--orange); }
+.sb .kpi-card { --cg:rgba(255,69,58,.18); }  .sb .kpi-value { color:var(--red); }
+
+/* CHARTS */
+.charts-row  { display:grid; grid-template-columns:3fr 2fr; gap:12px; margin-bottom:12px; }
+.chart-card  {
+  background:var(--g3); border-radius:20px; padding:24px;
+  border:1px solid rgba(255,255,255,.06); animation:fadeUp .5s ease .25s both;
+}
+.chart-header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
+.chart-title { font-size:15px; font-weight:600; letter-spacing:-.2px; }
+.chart-tabs  { display:flex; gap:4px; background:rgba(255,255,255,.06); border-radius:8px; padding:3px; }
+.chart-tab   {
+  padding:4px 12px; font-size:12px; font-weight:600; color:var(--t3);
+  border:none; background:transparent; border-radius:6px;
+  cursor:pointer; transition:all .2s; font-family:var(--font);
+}
+.chart-tab.active { background:var(--g5); color:var(--text); }
+canvas { max-height:200px; }
+.wide-card {
+  background:var(--g3); border-radius:20px; padding:24px;
+  border:1px solid rgba(255,255,255,.06); margin-bottom:12px;
+  animation:fadeUp .5s ease .3s both;
+}
+.isp-pill {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:4px 10px; background:rgba(255,255,255,.07);
+  border-radius:980px; font-size:12px; font-weight:500; color:var(--t2);
+}
+
+/* BOTTOM */
+.bottom-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:12px; }
+.stat-list   { display:flex; flex-direction:column; gap:2px; margin-top:4px; }
+.stat-row    { display:flex; justify-content:space-between; align-items:center; padding:11px 0; border-bottom:1px solid rgba(255,255,255,.05); font-size:14px; }
+.stat-row:last-child { border-bottom:none; }
+.stat-lbl    { color:var(--t2); font-weight:400; }
+.stat-val    { color:var(--text); font-weight:600; font-variant-numeric:tabular-nums; }
+
+/* HEATMAP */
+.hm-grid   { display:grid; grid-template-columns:repeat(12,1fr); gap:4px; margin-top:8px; }
+.hm-cell   { aspect-ratio:1; border-radius:5px; background:var(--cc,rgba(255,255,255,.04)); transition:transform .15s; cursor:default; }
+.hm-cell:hover { transform:scale(1.2); z-index:2; position:relative; }
+.hm-labels { display:grid; grid-template-columns:repeat(12,1fr); gap:4px; margin-top:5px; font-size:9px; color:var(--t3); text-align:center; font-weight:500; }
+
+/* ALERTS */
+.alert-list { display:flex; flex-direction:column; gap:8px; margin-top:4px; }
+.alert-item { display:flex; align-items:flex-start; gap:12px; padding:12px 14px; border-radius:12px; background:rgba(255,255,255,.04); font-size:13px; transition:background .2s; }
+.alert-item:hover { background:rgba(255,255,255,.07); }
+.alert-dot  { width:8px; height:8px; border-radius:50%; margin-top:4px; flex-shrink:0; }
+.ad-red     { background:var(--red);    box-shadow:0 0 6px var(--red); }
+.ad-orange  { background:var(--orange); box-shadow:0 0 6px var(--orange); }
+.ad-blue    { background:var(--blue);   box-shadow:0 0 6px var(--blue); }
+.alert-msg  { color:var(--text); line-height:1.4; }
+.alert-time { font-size:11px; color:var(--t3); margin-top:2px; }
+
+/* ANIMATIONS */
+@keyframes fadeUp   { from{opacity:0;transform:translateY(18px)} to{opacity:1;transform:none} }
+@keyframes fadeDown { from{opacity:0;transform:translateY(-12px)} to{opacity:1;transform:none} }
+
+/* RESPONSIVE */
+@media(max-width:900px){ .kpi-row{grid-template-columns:1fr 1fr} .charts-row{grid-template-columns:1fr} .bottom-grid{grid-template-columns:1fr} }
+@media(max-width:500px){ .kpi-row{grid-template-columns:1fr 1fr;gap:8px} .kpi-value{font-size:32px} .page{padding:0 16px 40px} nav{padding:16px 0 24px} }
+</style>
+</head>
+<body>
+<div class="bg-glow"></div>
+<div class="page">
+
+  <!-- NAV -->
+  <nav>
+    <div class="nav-brand">
+      <div class="nav-icon">📡</div>
+      <div class="nav-title">NetPulse</div>
+    </div>
+    <div class="nav-right">
+      <div class="live-badge"><div class="live-dot"></div>Live</div>
+      <div id="nav-clock">--:--:--</div>
+      <a href="http://localhost:5000/predictor_dashboard.html" class="btn-ghost">🔮 AI Predict</a>
+      <button class="btn-run" onclick="triggerCollection()">Run Test</button>
+    </div>
+  </nav>
+
+  <!-- KPI -->
+  <div class="section-label">Network Status</div>
+  <div class="kpi-row">
+    <div id="wrap-dl">
+      <div class="kpi-card" id="card-dl">
+        <div class="kpi-label"><span class="kpi-icon">↓</span> Download</div>
+        <div class="kpi-value" id="kpi-dl">--<span class="kpi-unit">Mbps</span></div>
+        <div class="kpi-sub"  id="sub-dl">Avg today: --</div>
+        <div class="kpi-track"><div class="kpi-fill" id="fill-dl" style="width:0%;--fc:var(--blue)"></div></div>
+      </div>
+    </div>
+    <div id="wrap-ul">
+      <div class="kpi-card" id="card-ul">
+        <div class="kpi-label"><span class="kpi-icon">↑</span> Upload</div>
+        <div class="kpi-value" id="kpi-ul">--<span class="kpi-unit">Mbps</span></div>
+        <div class="kpi-sub"  id="sub-ul">Avg today: --</div>
+        <div class="kpi-track"><div class="kpi-fill" id="fill-ul" style="width:0%;--fc:var(--teal)"></div></div>
+      </div>
+    </div>
+    <div id="wrap-lat">
+      <div class="kpi-card" id="card-lat">
+        <div class="kpi-label"><span class="kpi-icon">⏱</span> Latency</div>
+        <div class="kpi-value" id="kpi-lat">--<span class="kpi-unit">ms</span></div>
+        <div class="kpi-sub"  id="sub-lat">Best today: --</div>
+        <div class="kpi-track"><div class="kpi-fill" id="fill-lat" style="width:0%;--fc:var(--green)"></div></div>
+      </div>
+    </div>
+    <div id="wrap-loss">
+      <div class="kpi-card" id="card-loss">
+        <div class="kpi-label"><span class="kpi-icon">⚠</span> Packet Loss</div>
+        <div class="kpi-value" id="kpi-loss">--<span class="kpi-unit">%</span></div>
+        <div class="kpi-sub"  id="sub-loss">Jitter: -- ms</div>
+        <div class="kpi-track"><div class="kpi-fill" id="fill-loss" style="width:0%;--fc:var(--yellow)"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SPEED + GAUGE -->
+  <div class="charts-row">
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">Speed History</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="isp-pill">🌐 <span id="isp-name">--</span></div>
+          <div class="chart-tabs">
+            <button class="chart-tab active" onclick="setRange(6,this)">6H</button>
+            <button class="chart-tab" onclick="setRange(24,this)">24H</button>
+            <button class="chart-tab" onclick="setRange(72,this)">3D</button>
+          </div>
+        </div>
+      </div>
+      <canvas id="speedChart"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-header"><div class="chart-title">Live Gauges</div></div>
+      <canvas id="gaugeChart"></canvas>
+      <div style="display:flex;justify-content:space-around;margin-top:10px;font-size:12px;color:var(--t3)">
+        <span>↓ Download</span><span>↑ Upload</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- LATENCY -->
+  <div class="wide-card">
+    <div class="chart-header">
+      <div class="chart-title">Latency &amp; Jitter</div>
+      <div class="isp-pill">Last 24 hours</div>
+    </div>
+    <canvas id="latencyChart"></canvas>
+  </div>
+
+  <!-- BOTTOM -->
+  <div class="section-label">Analytics</div>
+  <div class="bottom-grid">
+    <div class="chart-card" style="animation-delay:.35s">
+      <div class="chart-title" style="margin-bottom:6px">Today's Summary</div>
+      <div class="isp-pill" style="margin-bottom:14px"><span id="test-count">--</span> tests today</div>
+      <div class="stat-list">
+        <div class="stat-row"><span class="stat-lbl">Avg Download</span><span class="stat-val" id="s-avg-dl">--</span></div>
+        <div class="stat-row"><span class="stat-lbl">Peak Download</span><span class="stat-val" id="s-max-dl">--</span></div>
+        <div class="stat-row"><span class="stat-lbl">Min Download</span> <span class="stat-val" id="s-min-dl">--</span></div>
+        <div class="stat-row"><span class="stat-lbl">Avg Upload</span>   <span class="stat-val" id="s-avg-ul">--</span></div>
+        <div class="stat-row"><span class="stat-lbl">Avg Latency</span> <span class="stat-val" id="s-avg-lat">--</span></div>
+        <div class="stat-row"><span class="stat-lbl">Best Latency</span><span class="stat-val" id="s-best-lat">--</span></div>
+      </div>
+    </div>
+    <div class="chart-card" style="animation-delay:.4s">
+      <div class="chart-header" style="margin-bottom:12px">
+        <div class="chart-title">Peak Usage</div>
+        <div class="isp-pill">By hour of day</div>
+      </div>
+      <div class="hm-grid" id="hm-top"></div>
+      <div class="hm-grid" style="margin-top:4px" id="hm-bot"></div>
+      <div class="hm-labels" id="hml-top"></div>
+      <div class="hm-labels" id="hml-bot"></div>
+    </div>
+    <div class="chart-card" style="animation-delay:.45s">
+      <div class="chart-header" style="margin-bottom:8px">
+        <div class="chart-title">Alerts</div>
+        <div class="isp-pill" id="alert-count">--</div>
+      </div>
+      <div class="alert-list" id="alert-list">
+        <div style="color:var(--t3);font-size:13px;padding:12px 0">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+const API='http://localhost:5000/api';
+let historyHours=6;
+
+/* clock */
+function tick(){ document.getElementById('nav-clock').textContent=new Date().toTimeString().slice(0,8); }
+setInterval(tick,1000); tick();
+
+/* chart defaults */
+Chart.defaults.color='#6e6e73';
+Chart.defaults.borderColor='rgba(255,255,255,0.06)';
+Chart.defaults.font.family="'Figtree',sans-serif";
+Chart.defaults.font.size=12;
+const TIP={ backgroundColor:'#1c1c1e', borderColor:'rgba(255,255,255,0.1)', borderWidth:1, padding:10, cornerRadius:10, titleFont:{weight:'600'} };
+
+/* speed chart */
+const speedChart=new Chart(document.getElementById('speedChart').getContext('2d'),{
+  type:'line',
+  data:{ labels:[], datasets:[
+    { label:'Download (Mbps)', data:[], borderColor:'#0a84ff', backgroundColor:'rgba(10,132,255,0.08)', fill:true, tension:.45, pointRadius:0, pointHoverRadius:5, borderWidth:2 },
+    { label:'Upload (Mbps)',   data:[], borderColor:'#5ac8fa', backgroundColor:'rgba(90,200,250,0.05)', fill:true, tension:.45, pointRadius:0, pointHoverRadius:5, borderWidth:2 },
+  ]},
+  options:{ responsive:true, maintainAspectRatio:true, interaction:{mode:'index',intersect:false},
+    plugins:{legend:{labels:{boxWidth:8,padding:16,usePointStyle:true}}, tooltip:TIP},
+    scales:{ x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{maxTicksLimit:7,maxRotation:0}},
+             y:{grid:{color:'rgba(255,255,255,0.04)'},min:0,title:{display:true,text:'Mbps',color:'#6e6e73'}} } }
+});
+
+/* gauge */
+const gaugeChart=new Chart(document.getElementById('gaugeChart').getContext('2d'),{
+  type:'doughnut',
+  data:{ labels:['Download','_','Upload','_'], datasets:[{
+    data:[0,100,0,50],
+    backgroundColor:['#0a84ff','rgba(255,255,255,0.04)','#5ac8fa','rgba(255,255,255,0.04)'],
+    borderWidth:0, borderRadius:4,
+  }]},
+  options:{ responsive:true, maintainAspectRatio:true, cutout:'68%',
+    plugins:{ legend:{display:false}, tooltip:{...TIP, filter:i=>i.dataIndex%2===0} } }
+});
+
+/* latency chart */
+const latencyChart=new Chart(document.getElementById('latencyChart').getContext('2d'),{
+  type:'line',
+  data:{ labels:[], datasets:[
+    { label:'Latency (ms)', data:[], borderColor:'#30d158', backgroundColor:'rgba(48,209,88,0.07)', fill:true,  tension:.45, pointRadius:0, borderWidth:2 },
+    { label:'Jitter (ms)',  data:[], borderColor:'#ffd60a', backgroundColor:'transparent',          fill:false, tension:.45, pointRadius:0, borderWidth:1.5, borderDash:[5,4] },
+  ]},
+  options:{ responsive:true, maintainAspectRatio:true, interaction:{mode:'index',intersect:false},
+    plugins:{legend:{labels:{boxWidth:8,padding:16,usePointStyle:true}}, tooltip:TIP},
+    scales:{ x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{maxTicksLimit:8,maxRotation:0}},
+             y:{grid:{color:'rgba(255,255,255,0.04)'},min:0,title:{display:true,text:'ms',color:'#6e6e73'}} } }
+});
+
+/* helpers */
+function setKPI(id,val,unit){ document.getElementById(id).innerHTML=`${val}<span class="kpi-unit">${unit}</span>`; }
+
+function applyStatus(wrapId, cardId, fillId, pct, status, fillColor){
+  const card=document.getElementById(cardId);
+  card.className=`kpi-card`;
+  if(status==='good') card.style.setProperty('--cg','rgba(48,209,88,.18)');
+  else if(status==='warn') card.style.setProperty('--cg','rgba(255,159,10,.18)');
+  else card.style.setProperty('--cg','rgba(255,69,58,.18)');
+  const fill=document.getElementById(fillId);
+  fill.style.width=Math.min(100,Math.max(0,pct))+'%';
+  fill.style.setProperty('--fc',fillColor);
+  if(status==='good') card.querySelector('.kpi-value').style.color='var(--green)';
+  else if(status==='warn') card.querySelector('.kpi-value').style.color='var(--orange)';
+  else if(status==='bad') card.querySelector('.kpi-value').style.color='var(--red)';
+  else card.querySelector('.kpi-value').style.color='var(--text)';
+}
+
+async function loadLatest(){
+  try{
+    const j=await(await fetch(`${API}/latest`)).json();
+    if(j.status!=='ok') return;
+    const d=j.data;
+    setKPI('kpi-dl', d.download_mbps.toFixed(1),'Mbps');
+    setKPI('kpi-ul', d.upload_mbps.toFixed(1),  'Mbps');
+    setKPI('kpi-lat',d.latency_ms.toFixed(0),   'ms');
+    setKPI('kpi-loss',d.packet_loss_pct.toFixed(1),'%');
+    document.getElementById('sub-loss').textContent=`Jitter: ${d.jitter_ms?.toFixed(1)??'--'} ms`;
+    if(d.isp) document.getElementById('isp-name').textContent=d.isp;
+
+    const dlS=d.download_mbps>=10?'good':d.download_mbps>=5?'warn':'bad';
+    applyStatus('wrap-dl','card-dl','fill-dl',(d.download_mbps/100)*100,dlS,
+      d.download_mbps>=10?'var(--green)':d.download_mbps>=5?'var(--orange)':'var(--red)');
+
+    const ulS=d.upload_mbps>=5?'good':d.upload_mbps>=2?'warn':'bad';
+    applyStatus('wrap-ul','card-ul','fill-ul',(d.upload_mbps/50)*100,ulS,'var(--teal)');
+
+    const latS=d.latency_ms<60?'good':d.latency_ms<150?'warn':'bad';
+    applyStatus('wrap-lat','card-lat','fill-lat',100-(d.latency_ms/300)*100,latS,'var(--green)');
+
+    const lossS=d.packet_loss_pct<1?'good':d.packet_loss_pct<5?'warn':'bad';
+    applyStatus('wrap-loss','card-loss','fill-loss',100-d.packet_loss_pct*5,lossS,'var(--yellow)');
+
+    gaugeChart.data.datasets[0].data=[Math.min(d.download_mbps,100),100-Math.min(d.download_mbps,100),Math.min(d.upload_mbps,50),50-Math.min(d.upload_mbps,50)];
+    gaugeChart.update('none');
+  }catch(e){console.warn(e);}
+}
+
+async function loadHistory(){
+  try{
+    const j=await(await fetch(`${API}/history?hours=${historyHours}&limit=300`)).json();
+    if(j.status!=='ok') return;
+    const rows=j.data.rows;
+    const labels=rows.map(r=>r.timestamp.slice(11,16));
+    speedChart.data.labels=labels;
+    speedChart.data.datasets[0].data=rows.map(r=>r.download_mbps);
+    speedChart.data.datasets[1].data=rows.map(r=>r.upload_mbps);
+    speedChart.update('none');
+    latencyChart.data.labels=labels;
+    latencyChart.data.datasets[0].data=rows.map(r=>r.latency_ms);
+    latencyChart.data.datasets[1].data=rows.map(r=>r.jitter_ms||0);
+    latencyChart.update('none');
+  }catch(e){console.warn(e);}
+}
+
+function setRange(h,btn){
+  historyHours=h;
+  document.querySelectorAll('.chart-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  loadHistory();
+}
+
+async function loadSummary(){
+  try{
+    const j=await(await fetch(`${API}/summary`)).json();
+    if(j.status!=='ok') return;
+    const s=j.data, f=(v,u)=>v!=null?`${v} ${u}`:'--';
+    document.getElementById('s-avg-dl').textContent  =f(s.avg_download,'Mbps');
+    document.getElementById('s-max-dl').textContent  =f(s.max_download,'Mbps');
+    document.getElementById('s-min-dl').textContent  =f(s.min_download,'Mbps');
+    document.getElementById('s-avg-ul').textContent  =f(s.avg_upload,'Mbps');
+    document.getElementById('s-avg-lat').textContent =f(s.avg_latency,'ms');
+    document.getElementById('s-best-lat').textContent=f(s.best_latency,'ms');
+    document.getElementById('test-count').textContent=s.total_tests??0;
+    if(s.avg_download) document.getElementById('sub-dl').textContent=`Avg today: ${s.avg_download} Mbps`;
+    if(s.avg_upload)   document.getElementById('sub-ul').textContent=`Avg today: ${s.avg_upload} Mbps`;
+    if(s.best_latency) document.getElementById('sub-lat').textContent=`Best today: ${s.best_latency} ms`;
+  }catch(e){console.warn(e);}
+}
+
+async function loadAlerts(){
+  try{
+    const j=await(await fetch(`${API}/alerts?limit=6`)).json();
+    if(j.status!=='ok') return;
+    const alerts=j.data.alerts;
+    document.getElementById('alert-count').textContent=`${alerts.length} recent`;
+    const el=document.getElementById('alert-list');
+    if(!alerts.length){
+      el.innerHTML=`<div style="display:flex;align-items:center;gap:8px;color:var(--green);font-size:13px;padding:10px 0"><span style="font-size:16px">✓</span>Network is healthy</div>`;
+      return;
+    }
+    const dc={slow_speed:'ad-orange',high_latency:'ad-red',packet_loss:'ad-orange'};
+    el.innerHTML=alerts.map(a=>`<div class="alert-item"><div class="alert-dot ${dc[a.alert_type]||'ad-blue'}"></div><div><div class="alert-msg">${a.message}</div><div class="alert-time">${a.timestamp}</div></div></div>`).join('');
+  }catch(e){console.warn(e);}
+}
+
+async function loadHeatmap(){
+  try{
+    const j=await(await fetch(`${API}/stats/peak-hours`)).json();
+    if(j.status!=='ok') return;
+    const byHour={};
+    j.data.forEach(r=>byHour[r.hour_of_day]=r.avg_download||0);
+    const mx=Math.max(...Object.values(byHour),1);
+    const cell=h=>{
+      const v=byHour[h]||0, p=v/mx;
+      const c=p<.3?`rgba(255,69,58,${.3+p})`
+              :p<.6?`rgba(255,159,10,${.4+p*.5})`
+                   :`rgba(10,132,255,${.4+p*.5})`;
+      return `<div class="hm-cell" style="--cc:${c}" title="${String(h).padStart(2,'0')}:00 — ${v} Mbps"></div>`;
+    };
+    document.getElementById('hm-top').innerHTML  =Array.from({length:12},(_,i)=>cell(i)).join('');
+    document.getElementById('hm-bot').innerHTML  =Array.from({length:12},(_,i)=>cell(i+12)).join('');
+    document.getElementById('hml-top').innerHTML =Array.from({length:12},(_,i)=>`<div>${i}</div>`).join('');
+    document.getElementById('hml-bot').innerHTML =Array.from({length:12},(_,i)=>`<div>${i+12}</div>`).join('');
+  }catch(e){console.warn(e);}
+}
+
+async function triggerCollection(){
+  const btn=document.querySelector('.btn-run');
+  btn.textContent='Testing…'; btn.disabled=true;
+  try{ await fetch(`${API}/collect`,{method:'POST'}); }catch(e){}
+  setTimeout(()=>{ btn.textContent='Run Test'; btn.disabled=false; refreshAll(); },35000);
+}
+
+async function refreshAll(){
+  await Promise.all([loadLatest(),loadHistory(),loadSummary(),loadAlerts(),loadHeatmap()]);
+}
+refreshAll();
+setInterval(refreshAll,30000);
+</script>
+</body>
+</html>

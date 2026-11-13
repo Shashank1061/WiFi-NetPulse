@@ -1,0 +1,20 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+
+# Runtime logs
+*.log
+
+# Local databases
+*.db
+
+# Secrets
+.env
+.env.*
+
+# Testing cache
+.pytest_cache/

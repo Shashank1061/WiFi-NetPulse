@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>NetPulse — AI Speed Predictor</title>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --black:#000;--g1:#0a0a0a;--g2:#141414;--g3:#1c1c1e;--g4:#2c2c2e;--g5:#3a3a3c;--g6:#48484a;
+  --text:#f5f5f7;--t2:#a1a1a6;--t3:#6e6e73;
+  --blue:#0a84ff;--blue2:#409cff;--green:#30d158;--yellow:#ffd60a;
+  --orange:#ff9f0a;--red:#ff453a;--teal:#5ac8fa;--purple:#bf5af2;--purple2:#da8fff;
+  --font:'Figtree',-apple-system,BlinkMacSystemFont,sans-serif;
+}
+html{scroll-behavior:smooth;}
+body{background:var(--black);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-x:hidden;}
+.bg-glow{
+  position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(ellipse 55% 40% at 80% 10%,rgba(191,90,242,.07) 0%,transparent 60%),
+    radial-gradient(ellipse 40% 30% at 10% 80%,rgba(10,132,255,.05) 0%,transparent 60%);
+}
+.page{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:0 24px 60px;}
+
+/* NAV */
+nav{display:flex;align-items:center;justify-content:space-between;padding:20px 0 32px;animation:fadeDown .6s ease both;}
+.nav-brand{display:flex;align-items:center;gap:10px;}
+.nav-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--purple),var(--blue));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+.nav-title{font-size:17px;font-weight:700;letter-spacing:-.3px;}
+.nav-sub{font-size:12px;color:var(--t3);margin-top:-2px;}
+.nav-right{display:flex;align-items:center;gap:10px;}
+.btn{padding:8px 18px;font-family:var(--font);font-size:13px;font-weight:600;border:none;border-radius:980px;cursor:pointer;transition:all .2s cubic-bezier(.25,.46,.45,.94);}
+.btn-primary{background:var(--purple);color:#fff;}
+.btn-primary:hover{background:var(--purple2);transform:scale(1.03);}
+.btn-primary:active{transform:scale(.97);}
+.btn-ghost{background:rgba(255,255,255,.08);color:var(--text);text-decoration:none;display:inline-block;backdrop-filter:blur(10px);}
+.btn-ghost:hover{background:rgba(255,255,255,.14);}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none!important;}
+
+/* MODEL STATUS BAR */
+.status-bar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 20px;background:var(--g3);border-radius:16px;
+  border:1px solid rgba(255,255,255,.06);margin-bottom:28px;
+  animation:fadeUp .5s ease .05s both;
+}
+.status-items{display:flex;align-items:center;gap:32px;}
+.si{display:flex;flex-direction:column;gap:2px;}
+.si-label{font-size:10px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--t3);}
+.si-value{font-size:14px;font-weight:600;color:var(--text);}
+.si-value.good{color:var(--green);}
+.si-value.warn{color:var(--orange);}
+.model-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--t3);margin-right:7px;vertical-align:middle;}
+.model-dot.ready{background:var(--green);box-shadow:0 0 8px var(--green);}
+.model-dot.miss {background:var(--orange);}
+
+/* SECTION LABEL */
+.section-label{font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--t3);margin-bottom:14px;padding-left:2px;}
+
+/* RANGE TABS */
+.range-row{display:flex;align-items:center;gap:8px;margin-bottom:20px;}
+.range-label{font-size:12px;font-weight:500;color:var(--t3);margin-right:4px;}
+.range-tabs{display:flex;gap:4px;background:rgba(255,255,255,.06);border-radius:10px;padding:3px;}
+.rt{padding:5px 14px;font-size:12px;font-weight:600;color:var(--t3);border:none;background:transparent;border-radius:8px;cursor:pointer;transition:all .2s;font-family:var(--font);}
+.rt.active{background:var(--g5);color:var(--text);}
+.isp-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:rgba(255,255,255,.07);border-radius:980px;font-size:12px;font-weight:500;color:var(--t2);}
+
+/* FORECAST CARDS */
+.forecast-cards{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:20px;}
+.fc{
+  background:var(--g3);border-radius:16px;padding:16px 10px;
+  text-align:center;border:1px solid rgba(255,255,255,.06);
+  transition:transform .2s cubic-bezier(.25,.46,.45,.94),box-shadow .2s;
+  position:relative;overflow:hidden;animation:fadeUp .5s ease both;
+}
+.fc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--qc,var(--purple));border-radius:2px 2px 0 0;}
+.fc:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,.5);}
+.fc:nth-child(1){animation-delay:.05s}.fc:nth-child(2){animation-delay:.08s}
+.fc:nth-child(3){animation-delay:.11s}.fc:nth-child(4){animation-delay:.14s}
+.fc:nth-child(5){animation-delay:.17s}.fc:nth-child(6){animation-delay:.20s}
+.fc-hour{font-size:11px;font-weight:500;color:var(--t3);margin-bottom:10px;}
+.fc-speed{font-size:22px;font-weight:700;letter-spacing:-1px;color:var(--text);line-height:1;font-variant-numeric:tabular-nums;}
+.fc-unit{font-size:10px;color:var(--t3);margin-bottom:8px;}
+.fc-meta{font-size:11px;color:var(--t3);}
+.fc-quality{
+  font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;
+  margin-top:10px;padding:3px 8px;border-radius:6px;
+  display:inline-block;background:rgba(255,255,255,.06);
+  color:var(--qc,var(--purple));
+}
+
+/* MAIN GRID */
+.main-grid{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px;}
+.chart-card{background:var(--g3);border-radius:20px;padding:24px;border:1px solid rgba(255,255,255,.06);animation:fadeUp .5s ease .3s both;}
+.chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
+.chart-title{font-size:15px;font-weight:600;letter-spacing:-.2px;}
+canvas{max-height:220px;}
+
+/* BEST HOURS */
+.best-list{display:flex;flex-direction:column;gap:8px;margin-top:4px;}
+.bh{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.04);transition:background .2s;cursor:default;}
+.bh:hover{background:rgba(255,255,255,.07);}
+.bh-rank{font-size:20px;min-width:28px;text-align:center;line-height:1;}
+.bh-info{flex:1;}
+.bh-time{font-size:14px;font-weight:600;}
+.bh-meta{font-size:11px;color:var(--t3);margin-top:2px;}
+.bh-speed{text-align:right;}
+.bh-speed-val{font-size:18px;font-weight:700;color:var(--green);letter-spacing:-0.5px;font-variant-numeric:tabular-nums;}
+.bh-speed-unit{font-size:10px;color:var(--t3);}
+
+/* MODEL METRICS */
+.metrics-panel{background:var(--g3);border-radius:20px;padding:24px;border:1px solid rgba(255,255,255,.06);animation:fadeUp .5s ease .35s both;}
+.metrics-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;}
+.metric-cell{padding:16px;border:1px solid rgba(255,255,255,.06);border-radius:14px;text-align:center;}
+.metric-val{font-size:24px;font-weight:700;color:var(--purple);letter-spacing:-1px;font-variant-numeric:tabular-nums;}
+.metric-lbl{font-size:11px;color:var(--t3);margin-top:4px;font-weight:500;}
+.info-text{font-size:13px;color:var(--t2);line-height:1.8;}
+.info-text strong{color:var(--text);}
+.info-text span{color:var(--purple);}
+
+/* TOAST */
+#toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;background:var(--g3);border:1px solid rgba(255,255,255,.1);border-radius:12px;font-size:13px;font-weight:500;color:var(--text);display:none;z-index:600;animation:slideUp .3s ease;}
+#toast.show{display:block;}
+@keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+
+/* LOADING */
+.loading{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);align-items:center;justify-content:center;flex-direction:column;gap:16px;z-index:500;backdrop-filter:blur(6px);}
+.loading.show{display:flex;}
+.spinner{width:44px;height:44px;border:3px solid rgba(255,255,255,.1);border-top-color:var(--purple);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{font-size:14px;font-weight:500;color:var(--t2);}
+
+/* EMPTY */
+.empty{text-align:center;padding:36px 20px;color:var(--t3);font-size:13px;}
+.empty-icon{font-size:40px;margin-bottom:12px;}
+
+/* ANIMATIONS */
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@keyframes fadeDown{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+
+/* RESPONSIVE */
+@media(max-width:1000px){.main-grid{grid-template-columns:1fr}.forecast-cards{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:600px){.forecast-cards{grid-template-columns:repeat(2,1fr)}.metrics-grid{grid-template-columns:1fr 1fr}.status-items{gap:16px}.page{padding:0 16px 40px}}
+</style>
+</head>
+<body>
+
+<div class="bg-glow"></div>
+<div class="loading" id="loading"><div class="spinner"></div><div class="loading-text" id="loading-msg">Training model…</div></div>
+<div id="toast"></div>
+
+<div class="page">
+
+  <!-- NAV -->
+  <nav>
+    <div class="nav-brand">
+      <div class="nav-icon">🔮</div>
+      <div>
+        <div class="nav-title">NetPulse AI</div>
+        <div class="nav-sub">Speed Predictor</div>
+      </div>
+    </div>
+    <div class="nav-right">
+      <a href="/" class="btn btn-ghost">← Dashboard</a>
+      <button class="btn btn-primary" id="train-btn" onclick="trainModel()">Train Model</button>
+    </div>
+  </nav>
+
+  <!-- MODEL STATUS BAR -->
+  <div class="status-bar">
+    <div class="status-items">
+      <div class="si">
+        <div class="si-label">Model</div>
+        <div class="si-value" id="model-status">
+          <span class="model-dot" id="model-dot"></span><span id="model-status-text">Checking…</span>
+        </div>
+      </div>
+      <div class="si">
+        <div class="si-label">Trained On</div>
+        <div class="si-value" id="model-samples">--</div>
+      </div>
+      <div class="si">
+        <div class="si-label">Last Trained</div>
+        <div class="si-value" id="model-date">--</div>
+      </div>
+      <div class="si">
+        <div class="si-label">Download Error</div>
+        <div class="si-value good" id="model-mae">--</div>
+      </div>
+    </div>
+    <div class="isp-pill" id="gen-at" style="font-size:11px">Generated: --</div>
+  </div>
+
+  <!-- RANGE + REFRESH -->
+  <div class="range-row">
+    <span class="range-label">Forecast</span>
+    <div class="range-tabs">
+      <button class="rt" onclick="setRange(3,this)">3H</button>
+      <button class="rt active" onclick="setRange(6,this)">6H</button>
+      <button class="rt" onclick="setRange(12,this)">12H</button>
+      <button class="rt" onclick="setRange(24,this)">24H</button>
+    </div>
+    <button class="btn btn-ghost" style="margin-left:auto;padding:7px 14px;font-size:12px" onclick="refresh()">↺ Refresh</button>
+  </div>
+
+  <!-- FORECAST CARDS -->
+  <div class="section-label">Hourly Forecast</div>
+  <div class="forecast-cards" id="forecast-cards">
+    <div class="empty" style="grid-column:1/-1"><div class="empty-icon">🔮</div>Train the model to see predictions</div>
+  </div>
+
+  <!-- CHART + BEST HOURS -->
+  <div class="main-grid">
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">Speed Forecast</div>
+        <div style="display:flex;gap:12px;font-size:12px;color:var(--t3);align-items:center">
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:var(--purple);display:inline-block;border-radius:2px"></span>Download</span>
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:var(--teal);display:inline-block;border-radius:2px"></span>Upload</span>
+          <span style="display:flex;align-items:center;gap:5px"><span style="width:10px;height:2px;background:rgba(191,90,242,.3);display:inline-block;border-radius:2px;border:1px dashed var(--purple)"></span>Confidence</span>
+        </div>
+      </div>
+      <canvas id="forecastChart"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-header"><div class="chart-title">🏆 Best Hours</div></div>
+      <div class="best-list" id="best-list">
+        <div class="empty"><div class="empty-icon">📊</div>Train model first</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODEL METRICS -->
+  <div class="metrics-panel">
+    <div class="chart-header" style="margin-bottom:18px">
+      <div class="chart-title">Model Performance</div>
+      <div class="isp-pill">Random Forest Regressor</div>
+    </div>
+    <div class="metrics-grid">
+      <div class="metric-cell"><div class="metric-val" id="m-dl-r2">--</div><div class="metric-lbl">Download R²</div></div>
+      <div class="metric-cell"><div class="metric-val" id="m-ul-r2">--</div><div class="metric-lbl">Upload R²</div></div>
+      <div class="metric-cell"><div class="metric-val" id="m-lat-r2">--</div><div class="metric-lbl">Latency R²</div></div>
+      <div class="metric-cell"><div class="metric-val" id="m-dl-mae">--</div><div class="metric-lbl">Download MAE (Mbps)</div></div>
+      <div class="metric-cell"><div class="metric-val" id="m-ul-mae">--</div><div class="metric-lbl">Upload MAE (Mbps)</div></div>
+      <div class="metric-cell"><div class="metric-val" id="m-lat-mae">--</div><div class="metric-lbl">Latency MAE (ms)</div></div>
+    </div>
+    <div class="info-text">
+      <strong>How it works:</strong> The model uses a <span>Random Forest Regressor</span> trained on your collected network history.
+      Features include: hour of day, day of week, weekend/peak-hour flags, the last 3 readings as lag features, and rolling averages.
+      R² closer to 1.0 = better accuracy. MAE = average prediction error. The more data collected, the more accurate the predictions.
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API='http://localhost:5000/api';
+let forecastHours=6, forecastChart=null;
+
+/* toast */
+function toast(msg,d=3000){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),d); }
+
+/* loading */
+function setLoading(show,msg='Processing…'){ document.getElementById('loading').classList.toggle('show',show); document.getElementById('loading-msg').textContent=msg; }
+
+/* chart defaults */
+Chart.defaults.color='#6e6e73';
+Chart.defaults.borderColor='rgba(255,255,255,0.06)';
+Chart.defaults.font.family="'Figtree',sans-serif";
+Chart.defaults.font.size=12;
+const TIP={ backgroundColor:'#1c1c1e', borderColor:'rgba(255,255,255,0.1)', borderWidth:1, padding:10, cornerRadius:10, titleFont:{weight:'600'} };
+
+function initChart(){
+  forecastChart=new Chart(document.getElementById('forecastChart').getContext('2d'),{
+    type:'line',
+    data:{labels:[],datasets:[]},
+    options:{
+      responsive:true, maintainAspectRatio:true,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:false}, tooltip:TIP},
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{maxRotation:0}},
+        y:{grid:{color:'rgba(255,255,255,0.04)'},min:0,title:{display:true,text:'Mbps',color:'#6e6e73'}}
+      }
+    }
+  });
+}
+
+function renderCards(preds){
+  const el=document.getElementById('forecast-cards');
+  if(!preds.length){ el.innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📡</div>No predictions yet. Train the model first.</div>`; return; }
+  el.innerHTML=preds.map(p=>`
+    <div class="fc" style="--qc:${p.quality_color}">
+      <div class="fc-hour">${p.hour_label}</div>
+      <div class="fc-speed">${p.download_mbps.value.toFixed(1)}</div>
+      <div class="fc-unit">Mbps ↓</div>
+      <div class="fc-meta">↑ ${p.upload_mbps.value.toFixed(1)} Mbps</div>
+      <div class="fc-meta">⏱ ${p.latency_ms.value.toFixed(0)} ms</div>
+      <div class="fc-quality">${p.quality}</div>
+    </div>`).join('');
+}
+
+function renderChart(preds){
+  if(!forecastChart||!preds.length) return;
+  const labels=preds.map(p=>p.hour_label);
+  forecastChart.data.labels=labels;
+  forecastChart.data.datasets=[
+    { label:'Upper',  data:preds.map(p=>p.download_mbps.upper), borderColor:'transparent', backgroundColor:'rgba(191,90,242,0.1)', fill:'+1', pointRadius:0, tension:.45 },
+    { label:'Lower',  data:preds.map(p=>p.download_mbps.lower), borderColor:'transparent', backgroundColor:'rgba(191,90,242,0.1)', fill:false, pointRadius:0, tension:.45 },
+    { label:'Download (Mbps)', data:preds.map(p=>p.download_mbps.value), borderColor:'#bf5af2', backgroundColor:'transparent', fill:false, tension:.45, pointRadius:4, pointBackgroundColor:'#bf5af2', pointHoverRadius:7, borderWidth:2 },
+    { label:'Upload (Mbps)',   data:preds.map(p=>p.upload_mbps.value),   borderColor:'#5ac8fa', backgroundColor:'transparent', fill:false, tension:.45, pointRadius:4, pointBackgroundColor:'#5ac8fa', pointHoverRadius:7, borderWidth:2, borderDash:[5,3] },
+  ];
+  forecastChart.update();
+}
+
+function renderBestHours(best){
+  const el=document.getElementById('best-list');
+  if(!best.length){ el.innerHTML=`<div class="empty"><div class="empty-icon">🔮</div>Train model first</div>`; return; }
+  const medals=['🥇','🥈','🥉','4th','5th'];
+  el.innerHTML=best.map((h,i)=>`
+    <div class="bh">
+      <div class="bh-rank">${medals[i]}</div>
+      <div class="bh-info">
+        <div class="bh-time">${h.hour_label}</div>
+        <div class="bh-meta">Ping ${h.latency_ms.value.toFixed(0)} ms · ${h.quality}</div>
+      </div>
+      <div class="bh-speed">
+        <div class="bh-speed-val">${h.download_mbps.value.toFixed(1)}</div>
+        <div class="bh-speed-unit">Mbps</div>
+      </div>
+    </div>`).join('');
+}
+
+function renderModelMetrics(info){
+  if(!info.trained||!info.metrics) return;
+  const m=info.metrics;
+  const s=(id,v)=>{ const el=document.getElementById(id); if(el&&v!=null) el.textContent=v; };
+  s('m-dl-r2',m.download_mbps?.train_r2); s('m-ul-r2',m.upload_mbps?.train_r2); s('m-lat-r2',m.latency_ms?.train_r2);
+  s('m-dl-mae',m.download_mbps?.cv_mae); s('m-ul-mae',m.upload_mbps?.cv_mae); s('m-lat-mae',m.latency_ms?.cv_mae);
+  if(m.download_mbps?.cv_mae) document.getElementById('model-mae').textContent=`±${m.download_mbps.cv_mae} Mbps`;
+}
+
+async function loadModelInfo(){
+  try{
+    const j=await(await fetch(`${API}/ml/info`)).json();
+    if(j.status!=='ok') return;
+    const info=j.data;
+    const dot=document.getElementById('model-dot'), txt=document.getElementById('model-status-text');
+    if(info.trained){
+      dot.className='model-dot ready'; txt.textContent='Ready'; txt.style.color='var(--green)';
+      document.getElementById('model-samples').textContent=`${info.n_samples} samples`;
+      document.getElementById('model-date').textContent=info.trained_at?.slice(0,16)??'--';
+      renderModelMetrics(info);
+    } else {
+      dot.className='model-dot miss'; txt.textContent='Not trained'; txt.style.color='var(--orange)';
+    }
+  }catch(e){}
+}
+
+async function loadPredictions(){
+  try{
+    const j=await(await fetch(`${API}/ml/predict?hours=${forecastHours}`)).json();
+    if(j.status!=='ok'){ if(j.message?.includes('not trained')){ renderCards([]); } return; }
+    const preds=j.data.predictions;
+    document.getElementById('gen-at').textContent=`Generated: ${j.data.generated_at}`;
+    renderCards(preds); renderChart(preds);
+  }catch(e){ renderCards([]); }
+}
+
+async function loadBestHours(){
+  try{
+    const j=await(await fetch(`${API}/ml/best-hours`)).json();
+    if(j.status==='ok') renderBestHours(j.data.best_hours);
+  }catch(e){}
+}
+
+async function trainModel(){
+  setLoading(true,'Training Random Forest on your network data…');
+  document.getElementById('train-btn').disabled=true;
+  try{
+    const j=await(await fetch(`${API}/ml/train`,{method:'POST'})).json();
+    if(j.status==='ok'){
+      toast(`✓ Model trained on ${j.data.samples} samples!`,4000);
+      await loadModelInfo(); await loadPredictions(); await loadBestHours();
+    } else { toast(`✗ ${j.message}`,5000); }
+  } catch(e){ toast('✗ Could not reach the API. Is app.py running?',5000); }
+  setLoading(false);
+  document.getElementById('train-btn').disabled=false;
+}
+
+function setRange(h,btn){
+  forecastHours=h;
+  document.querySelectorAll('.rt').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  loadPredictions();
+}
+
+async function refresh(){ await loadPredictions(); await loadBestHours(); toast('↺ Predictions refreshed'); }
+
+initChart();
+loadModelInfo();
+loadPredictions();
+loadBestHours();
+</script>
+</body>
+</html>
