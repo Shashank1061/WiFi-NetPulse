@@ -486,37 +486,60 @@ async function loadHeatmap(){
   }catch(e){console.warn(e);}
 }
 
+const LOCAL_AGENT = 'http://127.0.0.1:8765';
+const LOCAL_AGENT_HEADERS = { 'X-WiFi-NetPulse-Request': 'dashboard' };
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 async function triggerCollection() {
     const btn = document.querySelector('.btn-run');
-
-    btn.textContent = 'Testing...';
+    btn.textContent = 'Connecting...';
     btn.disabled = true;
 
     try {
-        const response = await fetch(`${API}/collect`, {
-            method: 'POST'
+        // The local agent runs the speed test on this Windows laptop, not on Render.
+        const healthResponse = await fetch(`${LOCAL_AGENT}/health`, {
+            method: 'GET', headers: LOCAL_AGENT_HEADERS, cache: 'no-store'
         });
+        if (!healthResponse.ok) throw new Error('Local agent is not responding. Start it with start_local_agent.bat.');
+        const health = await healthResponse.json();
+        if (health.busy) throw new Error('A speed test is already running on this laptop.');
 
+        btn.textContent = 'Testing...';
+        const response = await fetch(`${LOCAL_AGENT}/collect`, {
+            method: 'POST', headers: LOCAL_AGENT_HEADERS
+        });
         const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Could not start local test.');
 
-        if (!response.ok) {
-            throw new Error(result.message || result.error || 'Collection failed');
+        // Wait for the local collector to finish and upload its result to Render.
+        const deadline = Date.now() + 180000;
+        let status = null;
+        while (Date.now() < deadline) {
+            await sleep(2000);
+            const statusResponse = await fetch(`${LOCAL_AGENT}/status`, {
+                method: 'GET', headers: LOCAL_AGENT_HEADERS, cache: 'no-store'
+            });
+            if (!statusResponse.ok) throw new Error('Lost connection to the local agent.');
+            status = await statusResponse.json();
+            if (!status.busy) break;
+            btn.textContent = 'Testing...';
         }
+        if (!status || status.busy) throw new Error('Test is taking longer than expected. Check the local agent terminal.');
+        if (!status.success) throw new Error(status.error || 'Local collection failed.');
 
         btn.textContent = 'Test Complete';
+        await loadNetworks();
         await refreshAll();
 
     } catch (error) {
-        console.error('Collection error:', error);
+        console.error('Local collection error:', error);
         btn.textContent = 'Test Failed';
-        alert('Run Test failed: ' + error.message);
+        alert('Run Test failed: ' + error.message + '\n\nIf this is the first run, allow Chrome to access the local network and keep the local agent terminal open.');
 
     } finally {
         btn.disabled = false;
-
-        setTimeout(() => {
-            btn.textContent = 'Run Test';
-        }, 3000);
+        setTimeout(() => { btn.textContent = 'Run Test'; }, 3000);
     }
 }
 
